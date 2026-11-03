@@ -1,0 +1,64 @@
+# A complete example of the Opifica pipeline language.
+on:
+  push:
+    branches: [main, "release/*"]
+  pull_request:
+    branches: [main]
+  tag:
+    pattern: "v*"
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  test:
+    name: Test
+    matrix:
+      os: [linux, windows, macos]
+      arch: [amd64, arm64]
+    runs-on:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+    timeout: 20m
+    steps:
+      - run: go test ./... -coverprofile=cover.out
+      - report: junit build/test-results/*.xml
+
+  lint:
+    runs-on: linux
+    if: '!event.pull_request || event.base_branch == "main"'
+    steps:
+      - run: make lint
+        continue-on-error: true
+
+  windows-installer:
+    needs: [test]
+    runs-on:
+      os: windows
+      image: vs-2022
+    steps:
+      - run: .\build\installer.ps1
+        shell: pwsh
+      - upload:
+          name: installer
+          paths: [dist/*.msi]
+
+  release:
+    needs: [test, lint, windows-installer]
+    if: event.tag != ""
+    runs-on:
+      os: macos
+      arch: arm64
+      image: xcode-16
+    secrets: [NOTARY_TOKEN]
+    steps:
+      - name: Build ${{ event.tag }}
+        run: make dist VERSION=${{ event.tag }}
+        env:
+          COMMIT: ${{ event.sha }}
+      - run: make notarize
+        secrets: [NOTARY_TOKEN]
+      - upload: dist/*.dmg
+      - sign:
+          paths: [dist/*.dmg]
+          profile: apple-developer-id

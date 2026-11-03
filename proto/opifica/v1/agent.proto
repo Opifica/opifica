@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package opifica.v1;
+
+option go_package = "github.com/opifica/opifica/gen/opifica/v1;opificav1";
+
+// AgentService is served by the agent inside each job VM and called only by
+// the worker on the host, over vsock or a virtio-serial channel. The guest never
+// talks to the controller and never sees the worker's credentials.
+service AgentService {
+  // Ready reports that the guest has booted and the agent is serving.
+  rpc Ready(ReadyRequest) returns (ReadyResponse);
+
+  // Checkout clones the repository from the worker's local Git mirror and
+  // checks out the exact commit.
+  rpc Checkout(CheckoutRequest) returns (CheckoutResponse);
+
+  // Exec runs one command and streams its output until it exits.
+  rpc Exec(ExecRequest) returns (stream ExecResponse);
+
+  // Collect returns files matching glob patterns, e.g. test reports or artifacts.
+  rpc Collect(CollectRequest) returns (stream CollectResponse);
+}
+
+message ReadyRequest {}
+
+message ReadyResponse {
+  string agent_version = 1;
+  string os = 2;
+  string arch = 3;
+}
+
+message CheckoutRequest {
+  // URL of the worker-hosted mirror as seen from the guest.
+  string mirror_url = 1;
+  string commit_sha = 2;
+  string directory = 3;
+}
+
+message CheckoutResponse {
+  // Commit actually checked out; the worker verifies it matches commit_sha.
+  string head_sha = 1;
+}
+
+message ExecRequest {
+  string command = 1;
+  string shell = 2;
+  string working_directory = 3;
+  // Includes secret values for this step. The agent keeps them in memory only.
+  map<string, string> env = 4;
+  // Values the agent must replace with "***" in any output it streams.
+  repeated string mask = 5;
+  uint32 timeout_seconds = 6;
+}
+
+message ExecResponse {
+  oneof event {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    int32 exit_code = 3; // sent last
+  }
+}
+
+message CollectRequest {
+  repeated string patterns = 1;
+  string base_directory = 2;
+}
+
+message CollectResponse {
+  string path = 1;
+  bytes data = 2;
+  bool eof = 3; // last chunk of this file
+}

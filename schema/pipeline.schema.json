@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Opifica/opifica/main/schema/pipeline.schema.json",
+  "title": "Opifica pipeline",
+  "description": "An Opifica pipeline file (.opifica/pipeline.yaml): which events start a run and which jobs run where.",
+  "type": "object",
+  "required": ["on", "jobs"],
+  "additionalProperties": false,
+  "properties": {
+    "on": { "$ref": "#/$defs/triggers" },
+    "env": { "$ref": "#/$defs/env" },
+    "jobs": {
+      "description": "Jobs keyed by ID. Jobs run in parallel unless ordered with needs.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/job" }
+    }
+  },
+  "$defs": {
+    "stringOrList": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "expression": {
+      "type": "string",
+      "pattern": "\\$\\{\\{.*\\}\\}"
+    },
+    "duration": {
+      "description": "A duration such as 30m or 1h30m.",
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "env": {
+      "description": "Environment variables. Values may use ${{ matrix.<key> }} and ${{ event.<field> }}.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "secretNames": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        { "type": "array", "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" } }
+      ]
+    },
+    "triggerName": { "enum": ["push", "pull_request", "tag"] },
+    "branchFilter": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "branches": {
+              "description": "Branch glob patterns. For pull requests, the target branch is matched. Empty matches all.",
+              "$ref": "#/$defs/stringOrList"
+            }
+          }
+        }
+      ]
+    },
+    "triggers": {
+      "description": "Events that start a run.",
+      "oneOf": [
+        { "$ref": "#/$defs/triggerName" },
+        { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/triggerName" } },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "push": { "$ref": "#/$defs/branchFilter" },
+            "pull_request": { "$ref": "#/$defs/branchFilter" },
+            "tag": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "pattern": { "description": "Tag glob patterns, e.g. v*.", "$ref": "#/$defs/stringOrList" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "os": {
+      "anyOf": [
+        { "enum": ["linux", "windows", "macos"] },
+        { "$ref": "#/$defs/expression" }
+      ]
+    },
+    "arch": {
+      "anyOf": [
+        { "enum": ["amd64", "arm64"] },
+        { "$ref": "#/$defs/expression" }
+      ]
+    },
+    "runsOn": {
+      "description": "The operating system, architecture and VM image the job needs.",
+      "oneOf": [
+        { "$ref": "#/$defs/os" },
+        {
+          "type": "object",
+          "required": ["os"],
+          "additionalProperties": false,
+          "properties": {
+            "os": { "$ref": "#/$defs/os" },
+            "arch": { "$ref": "#/$defs/arch" },
+            "image": { "description": "Golden image name. Defaults to \"default\".", "type": "string" },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "job": {
+      "type": "object",
+      "required": ["runs-on", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "runs-on": { "$ref": "#/$defs/runsOn" },
+        "matrix": {
+          "description": "Runs the job once per combination of values. Refer to values with ${{ matrix.<key> }}.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": ["string", "number", "boolean"] }
+          }
+        },
+        "needs": { "description": "Jobs that must succeed first.", "$ref": "#/$defs/stringOrList" },
+        "if": {
+          "description": "A CEL condition, e.g. event.tag != \"\". Variables: event, matrix.",
+          "type": ["string", "boolean"]
+        },
+        "env": { "$ref": "#/$defs/env" },
+        "secrets": { "description": "Secrets this job may use. The admin policy decides whether it gets them.", "$ref": "#/$defs/secretNames" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/step" } }
+      }
+    },
+    "paths": { "$ref": "#/$defs/stringOrList" },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["run"] },
+        { "required": ["report"] },
+        { "required": ["upload"] },
+        { "required": ["sign"] }
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "run": { "description": "Command to run in the job VM.", "type": "string", "minLength": 1 },
+        "shell": { "description": "e.g. bash, sh, pwsh, cmd.", "type": "string" },
+        "working-directory": { "type": "string" },
+        "report": {
+          "description": "Collect test reports, e.g. \"junit build/*.xml\".",
+          "oneOf": [
+            { "type": "string", "pattern": "^junit\\s+\\S" },
+            {
+              "type": "object",
+              "required": ["format", "paths"],
+              "additionalProperties": false,
+              "properties": {
+                "format": { "enum": ["junit"] },
+                "paths": { "$ref": "#/$defs/paths" }
+              }
+            }
+          ]
+        },
+        "upload": {
+          "description": "Store files as run artifacts.",
+          "oneOf": [
+            { "$ref": "#/$defs/paths" },
+            {
+              "type": "object",
+              "required": ["paths"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "paths": { "$ref": "#/$defs/paths" }
+              }
+            }
+          ]
+        },
+        "sign": {
+          "description": "Sign artifacts with the signing service. Only digests leave the VM.",
+          "oneOf": [
+            { "$ref": "#/$defs/paths" },
+            {
+              "type": "object",
+              "required": ["paths"],
+              "additionalProperties": false,
+              "properties": {
+                "paths": { "$ref": "#/$defs/paths" },
+                "profile": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "env": { "$ref": "#/$defs/env" },
+        "secrets": { "$ref": "#/$defs/secretNames" },
+        "continue-on-error": { "type": "boolean" },
+        "timeout": { "$ref": "#/$defs/duration" }
+      }
+    }
+  }
+}

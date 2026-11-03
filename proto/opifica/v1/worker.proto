@@ -1,0 +1,271 @@
+syntax = "proto3";
+
+package opifica.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/opifica/opifica/gen/opifica/v1;opificav1";
+
+// WorkerService is served by the controller. Workers always dial out to it,
+// so build machines need no inbound ports.
+service WorkerService {
+  // Join exchanges a one-time join token for a worker identity and an mTLS
+  // client certificate. Every later call is authenticated with that certificate.
+  rpc Join(JoinRequest) returns (JoinResponse);
+
+  // Connect is a long-lived bidirectional stream. The worker reports its state,
+  // job progress and logs; the controller assigns and cancels jobs and answers
+  // secret requests.
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+}
+
+// ---------------------------------------------------------------- Join
+
+message JoinRequest {
+  // One-time token created by an admin, e.g. `opifica worker token create`.
+  string join_token = 1;
+  // PEM-encoded certificate signing request for the worker's mTLS key.
+  // The private key never leaves the worker.
+  bytes csr_pem = 2;
+  WorkerInfo info = 3;
+}
+
+message JoinResponse {
+  string worker_id = 1;
+  // PEM-encoded client certificate signed by the controller's CA.
+  bytes certificate_pem = 2;
+  // PEM-encoded CA bundle the worker uses to verify the controller.
+  bytes ca_bundle_pem = 3;
+}
+
+message WorkerInfo {
+  string hostname = 1;
+  OperatingSystem os = 2;
+  Architecture arch = 3;
+  // Free-form labels used for scheduling, e.g. "pool=release", "gpu=true".
+  map<string, string> labels = 4;
+  // Maximum number of jobs (VMs) this worker runs at the same time.
+  uint32 max_concurrent_jobs = 5;
+  // Golden images available on this worker.
+  repeated ImageRef images = 6;
+  string version = 7;
+}
+
+enum OperatingSystem {
+  OPERATING_SYSTEM_UNSPECIFIED = 0;
+  OPERATING_SYSTEM_LINUX = 1;
+  OPERATING_SYSTEM_WINDOWS = 2;
+  OPERATING_SYSTEM_MACOS = 3;
+}
+
+enum Architecture {
+  ARCHITECTURE_UNSPECIFIED = 0;
+  ARCHITECTURE_AMD64 = 1;
+  ARCHITECTURE_ARM64 = 2;
+}
+
+message ImageRef {
+  // Logical name used in pipelines, e.g. "default" or "xcode-16".
+  string name = 1;
+  // SHA-256 digest of the image. Workers refuse to boot a mismatching image.
+  string digest = 2;
+}
+
+// ---------------------------------------------------------------- Stream: worker -> controller
+
+message ConnectRequest {
+  oneof message {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    JobUpdate job_update = 3;
+    LogChunk log_chunk = 4;
+    SecretRequest secret_request = 5;
+  }
+}
+
+// First message on every Connect stream.
+message Hello {
+  string worker_id = 1;
+  WorkerInfo info = 2;
+  // Jobs the worker is still running, e.g. after a reconnect.
+  repeated string running_job_ids = 3;
+}
+
+message Heartbeat {
+  google.protobuf.Timestamp sent_at = 1;
+  // VMs booted and waiting in the warm pool.
+  uint32 warm_vms = 2;
+  repeated string running_job_ids = 3;
+}
+
+message JobUpdate {
+  string job_id = 1;
+  JobState state = 2;
+  // Index of the step this update refers to, if any.
+  optional uint32 step_index = 3;
+  optional int32 exit_code = 4;
+  string error = 5;
+  google.protobuf.Timestamp at = 6;
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_QUEUED = 1;
+  JOB_STATE_ASSIGNED = 2;
+  JOB_STATE_PREPARING = 3;
+  JOB_STATE_RUNNING = 4;
+  JOB_STATE_UPLOADING = 5;
+  JOB_STATE_SUCCEEDED = 6;
+  JOB_STATE_FAILED = 7;
+  JOB_STATE_CANCELLED = 8;
+  JOB_STATE_ERRORED = 9; // infrastructure failure, eligible for retry
+}
+
+message LogChunk {
+  string job_id = 1;
+  uint32 step_index = 2;
+  // Monotonic per job, so the controller can drop duplicates after a reconnect.
+  uint64 sequence = 3;
+  LogStream stream = 4;
+  // Already masked: secret values are replaced before the chunk leaves the worker.
+  bytes data = 5;
+}
+
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
+  LOG_STREAM_SYSTEM = 3; // messages from Opifica itself
+}
+
+// Asks the controller for a secret on behalf of a running job. The controller
+// checks the job token and policy (pool, repo, branch, event) before answering.
+message SecretRequest {
+  string request_id = 1;
+  string job_id = 2;
+  string job_token = 3;
+  string name = 4;
+}
+
+// ---------------------------------------------------------------- Stream: controller -> worker
+
+message ConnectResponse {
+  oneof message {
+    AssignJob assign_job = 1;
+    CancelJob cancel_job = 2;
+    SecretResponse secret_response = 3;
+    Drain drain = 4;
+  }
+}
+
+message AssignJob {
+  Job job = 1;
+  // The lease must be renewed by heartbeats; if it expires the controller
+  // reassigns the job to another worker.
+  google.protobuf.Duration lease = 2;
+}
+
+message CancelJob {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message SecretResponse {
+  string request_id = 1;
+  oneof result {
+    bytes value = 2;
+    string denied_reason = 3;
+  }
+}
+
+// Stop accepting new jobs, finish running ones, then disconnect.
+message Drain {
+  string reason = 1;
+}
+
+// ---------------------------------------------------------------- Job
+
+message Job {
+  string id = 1;
+  string run_id = 2;
+  string name = 3;
+  // Short-lived token that scopes secret requests and uploads to this job.
+  string job_token = 4;
+  Source source = 5;
+  string image = 6;
+  repeated Step steps = 7;
+  map<string, string> env = 8;
+  // Secrets the job may request. Anything else is denied.
+  repeated string allowed_secrets = 9;
+  google.protobuf.Duration timeout = 10;
+  NetworkPolicy network = 11;
+}
+
+message Source {
+  // Clone URL on the forge. The worker fetches it into its local mirror;
+  // the VM checks out from the mirror and never needs forge access.
+  string clone_url = 1;
+  // Exact commit to build. Branch names are never used for checkout.
+  string commit_sha = 2;
+  string ref = 3;
+  // Short-lived, read-only credential for this one repository.
+  Credential credential = 4;
+}
+
+message Credential {
+  oneof kind {
+    string token = 1;
+    bytes ssh_private_key = 2;
+  }
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message Step {
+  string name = 1;
+  oneof action {
+    RunAction run = 2;
+    ReportAction report = 3;
+    UploadAction upload = 4;
+    SignAction sign = 5;
+  }
+  map<string, string> env = 6;
+  // Secrets injected into this step's environment.
+  repeated string secrets = 7;
+  bool continue_on_error = 8;
+  google.protobuf.Duration timeout = 9;
+}
+
+message RunAction {
+  string command = 1;
+  // e.g. "bash", "sh", "pwsh", "cmd". Empty means the image default.
+  string shell = 2;
+  string working_directory = 3;
+}
+
+message ReportAction {
+  ReportFormat format = 1;
+  repeated string paths = 2; // glob patterns
+}
+
+enum ReportFormat {
+  REPORT_FORMAT_UNSPECIFIED = 0;
+  REPORT_FORMAT_JUNIT = 1;
+}
+
+message UploadAction {
+  string name = 1;
+  repeated string paths = 2; // glob patterns
+}
+
+// The VM sends only the artifact digests; signing happens in the signer service.
+message SignAction {
+  repeated string paths = 1; // glob patterns
+  string profile = 2;
+}
+
+message NetworkPolicy {
+  // When true, only hosts in allow_hosts are reachable from the VM.
+  bool restricted = 1;
+  repeated string allow_hosts = 2;
+}
