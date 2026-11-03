@@ -22,6 +22,7 @@ import (
 
 	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
 	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
+	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/server"
 	"github.com/opifica/opifica/internal/testutil/pgtest"
 	"github.com/opifica/opifica/pkg/worker"
@@ -56,7 +57,7 @@ func TestTokenCreateAndJoinOverTLS(t *testing.T) {
 	}
 	defer closeFn()
 	svc.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
-	tlsCfg, err := tlsConfig(svc.CA, []string{"127.0.0.1"})
+	tlsCfg, err := api.TLSConfig(svc.CA, []string{"127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestTokenCreateAndJoinOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go server.ServeTLS(ctx, ln, newHandler(svc), tlsCfg, svc.Log)
+	go server.ServeTLS(ctx, ln, api.NewHandler(svc), tlsCfg, svc.Log)
 
 	// The worker has no CA yet: it accepts the controller only if the
 	// certificate chains to a CA with the pinned fingerprint.
@@ -94,11 +95,11 @@ func TestTokenCreateAndJoinOverTLS(t *testing.T) {
 		t.Errorf("Join response = %+v", resp.Msg)
 	}
 
-	// Still unimplemented: the stream comes next.
+	// Connect without a client certificate is refused.
 	stream := wc.Connect(ctx)
 	stream.Send(&opificav1.ConnectRequest{})
-	if _, err := stream.Receive(); connect.CodeOf(err) != connect.CodeUnimplemented {
-		t.Errorf("Connect: err = %v, want unimplemented", err)
+	if _, err := stream.Receive(); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("Connect without a certificate: err = %v, want unauthenticated", err)
 	}
 	stream.CloseRequest()
 	stream.CloseResponse()

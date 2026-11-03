@@ -267,11 +267,39 @@ func (q *Queries) SetJoinTokenWorker(ctx context.Context, arg SetJoinTokenWorker
 	return err
 }
 
-const touchWorker = `-- name: TouchWorker :exec
-UPDATE workers SET last_seen_at = now() WHERE id = $1
+const touchWorker = `-- name: TouchWorker :one
+UPDATE workers SET last_seen_at = now() WHERE id = $1 RETURNING revoked_at
 `
 
-func (q *Queries) TouchWorker(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, touchWorker, id)
+// Records that the worker is alive and returns its revocation time, so a
+// connected worker that has been revoked can be disconnected.
+func (q *Queries) TouchWorker(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+	row := q.db.QueryRow(ctx, touchWorker, id)
+	var revoked_at *time.Time
+	err := row.Scan(&revoked_at)
+	return revoked_at, err
+}
+
+const updateWorkerHello = `-- name: UpdateWorkerHello :exec
+UPDATE workers
+SET hostname = $2, version = $3, max_concurrent_jobs = $4, last_seen_at = now()
+WHERE id = $1
+`
+
+type UpdateWorkerHelloParams struct {
+	ID                uuid.UUID
+	Hostname          string
+	Version           string
+	MaxConcurrentJobs int32
+}
+
+// Facts a worker reports each time it connects.
+func (q *Queries) UpdateWorkerHello(ctx context.Context, arg UpdateWorkerHelloParams) error {
+	_, err := q.db.Exec(ctx, updateWorkerHello,
+		arg.ID,
+		arg.Hostname,
+		arg.Version,
+		arg.MaxConcurrentJobs,
+	)
 	return err
 }

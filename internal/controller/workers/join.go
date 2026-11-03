@@ -14,6 +14,7 @@ import (
 	"maps"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -49,6 +50,20 @@ type Service struct {
 	CA    *ca.CA
 	Log   *slog.Logger
 	Now   func() time.Time
+
+	// StreamConfig tunes the Connect stream.
+	StreamConfig ConnectConfig
+	// Messages receives job messages from workers; nil drops them.
+	Messages MessageHandler
+
+	sessionsOnce sync.Once
+	sessions     *Registry
+}
+
+// Sessions returns the registry of connected workers.
+func (s *Service) Sessions() *Registry {
+	s.sessionsOnce.Do(func() { s.sessions = NewRegistry() })
+	return s.sessions
 }
 
 func (s *Service) now() time.Time {

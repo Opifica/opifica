@@ -29,7 +29,8 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 - [x] **Certificate authority:** built-in CA that issues worker client certificates and the server certificate
 - [x] **Join:** admins create one-time join tokens (`controller token create`); `Join` checks the token and signs
   the worker's CSR; first contact is verified against the CA fingerprint printed with the token
-- [ ] **Connect stream:** Hello, heartbeats, worker registry, disconnect and reconnect handling
+- [x] **Connect stream:** Hello, heartbeats, worker registry, disconnect and reconnect handling, revocation
+  (`controller worker list`, `controller worker revoke`)
 - [ ] **Leases:** job assignment with a lease renewed by heartbeats; expired leases put the job back in the queue
 - [ ] **Scheduler:** match planned jobs to workers by OS, architecture, image, labels and pool; respect `needs`
 - [ ] **Runs:** create a run from a pipeline file and an event; track job and run state
@@ -37,12 +38,14 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 - [ ] **Secrets:** encrypted store; requests checked against the job token and policy
 - [ ] **Admin config:** static file for pools, routing (event → pool) and secret policy
 - [x] **TLS** on the worker API, with worker client certificates accepted
-- [ ] **mTLS required** for `Connect`, and certificate renewal
+- [x] **mTLS required** for `Connect`; the certificate must be the worker's current one
+- [ ] Certificate renewal before the 30-day expiry
 - [ ] **Admin API + CLI:** `opifica worker token create`, `opifica runs list`, `opifica logs <job>`
 
 ### Worker kit and agent
 
-- [ ] Controller client: join, connect, reconnect with backoff, heartbeats from pool stats
+- [x] Controller client: join (saving the identity to disk), connect, reconnect with backoff, heartbeats
+- [ ] Heartbeats filled from the warm pool and job runner
 - [ ] Job runner: lease a VM → checkout → run steps through the agent → stream masked logs → collect reports
   and artifacts → destroy the VM
 - [ ] Local Git mirror per repository

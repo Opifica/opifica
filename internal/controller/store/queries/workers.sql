@@ -30,8 +30,16 @@ SELECT * FROM workers WHERE id = $1;
 -- name: ListWorkers :many
 SELECT * FROM workers ORDER BY created_at;
 
--- name: TouchWorker :exec
-UPDATE workers SET last_seen_at = now() WHERE id = $1;
+-- name: TouchWorker :one
+-- Records that the worker is alive and returns its revocation time, so a
+-- connected worker that has been revoked can be disconnected.
+UPDATE workers SET last_seen_at = now() WHERE id = $1 RETURNING revoked_at;
+
+-- name: UpdateWorkerHello :exec
+-- Facts a worker reports each time it connects.
+UPDATE workers
+SET hostname = $2, version = $3, max_concurrent_jobs = $4, last_seen_at = now()
+WHERE id = $1;
 
 -- name: RevokeWorker :one
 UPDATE workers SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING *;
