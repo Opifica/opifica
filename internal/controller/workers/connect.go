@@ -58,10 +58,16 @@ type Stream interface {
 	Send(*opificav1.ConnectResponse) error
 }
 
-// MessageHandler receives what workers send about jobs. It is nil until the
-// scheduler exists; until then those messages are logged and dropped.
+// MessageHandler receives heartbeats and job messages from workers, after
+// the session has been updated. Returning an error ends the session.
 type MessageHandler interface {
 	HandleWorkerMessage(ctx context.Context, worker uuid.UUID, msg *opificav1.ConnectRequest) error
+	// WorkerConnected is called when a session starts, e.g. so the
+	// scheduler can offer it work.
+	WorkerConnected(worker uuid.UUID)
+	// WorkerDisconnected is called when a worker's current session ends,
+	// but not when a newer connection from the same worker replaced it.
+	WorkerDisconnected(worker uuid.UUID)
 }
 
 type peerCertKey struct{}
@@ -171,16 +177,29 @@ func (s *Service) Connect(ctx context.Context, cert *x509.Certificate, stream St
 	if err := json.Unmarshal(w.Labels, &labels); err != nil {
 		return connect.NewError(connect.CodeInternal, errors.New("stored worker labels are invalid"))
 	}
+	var images []string
+	for _, img := range info.GetImages() {
+		if img.GetName() != "" {
+			images = append(images, img.GetName())
+		}
+	}
 	now := s.now()
 	sess := &Session{
-		WorkerID: id, Pool: w.Pool, OS: w.Os, Arch: w.Arch, Labels: labels, MaxJobs: maxJobs,
+		WorkerID: id, Pool: w.Pool, OS: w.Os, Arch: w.Arch, Labels: labels, Images: images, MaxJobs: maxJobs,
 		ConnectedAt: now, lastSeen: now, running: hello.GetRunningJobIds(),
 		out: make(chan *opificav1.ConnectResponse, 16), ctx: ctx, cancel: cancel,
 	}
 	s.Sessions().register(sess)
-	defer s.Sessions().unregister(sess)
+	defer func() {
+		if s.Sessions().unregister(sess) && s.Messages != nil {
+			s.Messages.WorkerDisconnected(id)
+		}
+	}()
 	log := s.log().With("worker", id, "hostname", info.GetHostname())
-	log.Info("worker connected", "pool", w.Pool, "os", w.Os, "arch", w.Arch, "max_jobs", maxJobs)
+	log.Info("worker connected", "pool", w.Pool, "os", w.Os, "arch", w.Arch, "max_jobs", maxJobs, "images", images)
+	if s.Messages != nil {
+		s.Messages.WorkerConnected(id)
+	}
 
 	// Writer: the only goroutine that sends on the stream.
 	writer.Add(1)
@@ -271,6 +290,9 @@ func (s *Service) handle(ctx context.Context, sess *Session, m *opificav1.Connec
 	switch msg := m.GetMessage().(type) {
 	case *opificav1.ConnectRequest_Heartbeat:
 		sess.heartbeat(msg.Heartbeat, s.now())
+		if s.Messages != nil {
+			return s.Messages.HandleWorkerMessage(ctx, sess.WorkerID, m)
+		}
 		return nil
 	case *opificav1.ConnectRequest_Hello:
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("hello may only be sent once"))

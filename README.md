@@ -3,9 +3,9 @@
 Core of [Opifica](https://github.com/opifica), an open-source CI/CD system built in the EU
 where every job runs in a fresh virtual machine.
 
-> **Status:** early development. Working and tested: the pipeline language, the worker kit's warm pool, and
-> workers joining and staying connected to the controller. Scheduling and the agent come next; see
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status:** early development. Working and tested: the pipeline language, the worker kit's warm pool,
+> workers joining and staying connected to the controller, and scheduling runs onto them. The job runner and
+> agent come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 > See the [organisation page](https://github.com/opifica) for the architecture.
 
 ## What lives here
@@ -19,7 +19,8 @@ where every job runs in a fresh virtual machine.
 | `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, image verification, controller client | Working |
 | `pkg/worker/workertest` | Fake hypervisor for testing worker code without VMs | Working |
 | `cmd/controller` | Join tokens, worker joining over TLS, the Connect stream, worker revocation | Working |
-| | Scheduler, runs, logs, secrets, Git providers | Not started |
+| `internal/controller/scheduler` | Runs and jobs, matching jobs to workers, leases, retries, cancellation | Working |
+| | Logs, secrets, Git providers, admin API | Not started |
 | `cmd/agent` | Runs inside each VM, executes steps, streams logs and results | Skeleton |
 | `cmd/signer` | Signing service for release artifacts | Not started |
 
@@ -129,6 +130,11 @@ export OPIFICA_DATABASE_URL=postgres://localhost/opifica
 go run ./cmd/controller token create -pool trusted   # prints a join token and the CA fingerprint
 go run ./cmd/controller serve                        # TLS on :8443
 go run ./cmd/controller worker list
+
+# Until Git providers exist, start runs by hand:
+go run ./cmd/controller run create -repo acme/app -pool trusted -sha $(git rev-parse HEAD) -file .opifica/pipeline.yaml
+go run ./cmd/controller run list
+go run ./cmd/controller run show <run-id>
 ```
 
 ## Stack

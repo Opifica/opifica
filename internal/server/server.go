@@ -61,6 +61,9 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, tlsCfg *tls.Con
 		Protocols:         protocols,
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
+		// TLS handshake failures from bad clients are routine; keep them out
+		// of the default logger.
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelDebug),
 	}
 
 	errc := make(chan error, 1)

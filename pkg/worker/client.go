@@ -151,6 +151,10 @@ func httpClient(cfg *tls.Config) *http.Client {
 		TLSClientConfig:   cfg,
 		ForceAttemptHTTP2: true,
 		IdleConnTimeout:   90 * time.Second,
+		// Pings detect a controller that vanished without closing the
+		// connection (network cut, crash), which would otherwise leave the
+		// stream waiting forever.
+		HTTP2: &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second},
 	}}
 }
 
@@ -306,8 +310,20 @@ func (c *Client) session(ctx context.Context) error {
 		c.stream = nil
 		c.ready = make(chan struct{})
 		c.mu.Unlock()
-		stream.CloseRequest()
 		stream.CloseResponse()
+	}()
+
+	// Cancelling the context doesn't interrupt a Receive that is waiting
+	// for data. Closing our side of the stream does: the controller sees
+	// the end of the stream and ends its side too.
+	go func() {
+		<-ctx.Done()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.stream == stream {
+			c.stream = nil
+		}
+		stream.CloseRequest()
 	}()
 
 	go func() {

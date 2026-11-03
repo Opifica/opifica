@@ -21,6 +21,7 @@ import (
 	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
+	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
 	"github.com/opifica/opifica/internal/server"
@@ -30,12 +31,18 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 
-func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func quiet() *slog.Logger {
+	if os.Getenv("OPIFICA_TEST_LOG") != "" {
+		return slog.New(slog.NewTextHandler(os.Stderr, nil))
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 type env struct {
-	t   *testing.T
-	svc *workers.Service
-	url string
+	t     *testing.T
+	svc   *workers.Service
+	sched *scheduler.Scheduler
+	url   string
 }
 
 // newEnv starts a controller with short timeouts on a random port.
@@ -58,6 +65,11 @@ func newEnv(t *testing.T) *env {
 			TouchInterval:    50 * time.Millisecond,
 		},
 	}
+	sched := scheduler.New(st, svc.Sessions(), quiet(), scheduler.Config{
+		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond,
+	})
+	svc.Messages = sched
+	go sched.Run(ctx)
 	tlsCfg, err := api.TLSConfig(authority, []string{"127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +88,7 @@ func newEnv(t *testing.T) *env {
 		<-done
 		st.Close()
 	})
-	return &env{t: t, svc: svc, url: "https://" + ln.Addr().String()}
+	return &env{t: t, svc: svc, sched: sched, url: "https://" + ln.Addr().String()}
 }
 
 func info() *opificav1.WorkerInfo {
@@ -84,11 +96,17 @@ func info() *opificav1.WorkerInfo {
 		Hostname: "build-1", Os: opificav1.OperatingSystem_OPERATING_SYSTEM_LINUX,
 		Arch: opificav1.Architecture_ARCHITECTURE_AMD64, MaxConcurrentJobs: 4, Version: "test",
 		Labels: map[string]string{"kvm": "true"},
+		Images: []*opificav1.ImageRef{{Name: "default"}},
 	}
 }
 
 // join creates a token for pool and joins a worker with it.
 func (e *env) join(pool string) *worker.Identity {
+	e.t.Helper()
+	return e.joinWith(pool, info())
+}
+
+func (e *env) joinWith(pool string, wi *opificav1.WorkerInfo) *worker.Identity {
 	e.t.Helper()
 	tok, err := e.svc.CreateToken(context.Background(), workers.TokenRequest{Pool: pool})
 	if err != nil {
@@ -96,7 +114,7 @@ func (e *env) join(pool string) *worker.Identity {
 	}
 	id, err := worker.Join(context.Background(), worker.JoinConfig{
 		ControllerURL: e.url, Token: tok.Secret, CAFingerprint: tok.CAFingerprint,
-		StateDir: e.t.TempDir(), Info: info(),
+		StateDir: e.t.TempDir(), Info: wi,
 	})
 	if err != nil {
 		e.t.Fatalf("Join: %v", err)

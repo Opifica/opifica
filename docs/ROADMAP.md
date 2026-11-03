@@ -25,22 +25,25 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 ### Controller
 
 - [x] **Store:** PostgreSQL migrations and sqlc queries, for workers and join tokens so far
-- [ ] **Store:** runs and jobs
+- [x] **Store:** runs and jobs
 - [x] **Certificate authority:** built-in CA that issues worker client certificates and the server certificate
 - [x] **Join:** admins create one-time join tokens (`controller token create`); `Join` checks the token and signs
   the worker's CSR; first contact is verified against the CA fingerprint printed with the token
 - [x] **Connect stream:** Hello, heartbeats, worker registry, disconnect and reconnect handling, revocation
   (`controller worker list`, `controller worker revoke`)
-- [ ] **Leases:** job assignment with a lease renewed by heartbeats; expired leases put the job back in the queue
-- [ ] **Scheduler:** match planned jobs to workers by OS, architecture, image, labels and pool; respect `needs`
-- [ ] **Runs:** create a run from a pipeline file and an event; track job and run state
+- [x] **Leases:** job assignment with a lease renewed by heartbeats; expired leases put the job back in the queue
+  (up to 3 attempts); jobs a disconnected worker never started go back at once
+- [x] **Scheduler:** match planned jobs to workers by OS, architecture, image, labels and pool; respect `needs`;
+  safe with several controllers (`FOR UPDATE SKIP LOCKED`)
+- [x] **Runs:** create a run from a pipeline file and an event; track job and run state; cancel
 - [ ] **Logs:** receive log chunks, drop duplicates after reconnects, store them on disk
 - [ ] **Secrets:** encrypted store; requests checked against the job token and policy
 - [ ] **Admin config:** static file for pools, routing (event → pool) and secret policy
 - [x] **TLS** on the worker API, with worker client certificates accepted
 - [x] **mTLS required** for `Connect`; the certificate must be the worker's current one
 - [ ] Certificate renewal before the 30-day expiry
-- [ ] **Admin API + CLI:** `opifica worker token create`, `opifica runs list`, `opifica logs <job>`
+- [x] **Admin CLI (direct database access):** `controller token create`, `worker list|revoke`, `run create|list|show|cancel`
+- [ ] **Admin API** so the `opifica` CLI and web UI can do the same remotely; `opifica logs <job>`
 
 ### Worker kit and agent
 

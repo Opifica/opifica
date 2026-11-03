@@ -18,11 +18,13 @@ var ErrNotConnected = errors.New("worker is not connected")
 
 // Session is one live Connect stream from a worker.
 type Session struct {
-	WorkerID    uuid.UUID
-	Pool        string
-	OS          string
-	Arch        string
-	Labels      map[string]string
+	WorkerID uuid.UUID
+	Pool     string
+	OS       string
+	Arch     string
+	Labels   map[string]string
+	// Images are the golden image names the worker can boot.
+	Images      []string
 	MaxJobs     int
 	ConnectedAt time.Time
 
@@ -69,6 +71,7 @@ type SessionInfo struct {
 	OS          string
 	Arch        string
 	Labels      map[string]string
+	Images      []string
 	MaxJobs     int
 	ConnectedAt time.Time
 	LastSeen    time.Time
@@ -81,7 +84,7 @@ func (s *Session) info() SessionInfo {
 	defer s.mu.Unlock()
 	return SessionInfo{
 		WorkerID: s.WorkerID, Pool: s.Pool, OS: s.OS, Arch: s.Arch,
-		Labels: maps.Clone(s.Labels), MaxJobs: s.MaxJobs, ConnectedAt: s.ConnectedAt,
+		Labels: maps.Clone(s.Labels), Images: slices.Clone(s.Images), MaxJobs: s.MaxJobs, ConnectedAt: s.ConnectedAt,
 		LastSeen: s.lastSeen, WarmVMs: s.warmVMs, RunningJobs: slices.Clone(s.running),
 	}
 }
@@ -111,12 +114,16 @@ func (r *Registry) register(s *Session) {
 	}
 }
 
-func (r *Registry) unregister(s *Session) {
+// unregister removes s and reports whether it was still the worker's
+// current session (false if a newer connection replaced it).
+func (r *Registry) unregister(s *Session) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions[s.WorkerID] == s {
 		delete(r.sessions, s.WorkerID)
+		return true
 	}
+	return false
 }
 
 // Get returns the live session for a worker.

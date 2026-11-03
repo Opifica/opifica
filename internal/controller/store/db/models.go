@@ -11,6 +11,32 @@ import (
 	"github.com/google/uuid"
 )
 
+type Job struct {
+	ID             uuid.UUID
+	RunID          uuid.UUID
+	Key            string
+	Name           string
+	Pool           string
+	Os             string
+	Arch           string
+	Image          string
+	Labels         json.RawMessage
+	Needs          []string
+	Spec           []byte
+	State          string
+	Attempt        int32
+	MaxAttempts    int32
+	WorkerID       *uuid.UUID
+	LeaseExpiresAt *time.Time
+	TokenHash      []byte
+	ExitCode       *int32
+	Error          string
+	CreatedAt      time.Time
+	QueuedAt       *time.Time
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+}
+
 type JoinToken struct {
 	ID          uuid.UUID
 	TokenHash   []byte
@@ -21,6 +47,24 @@ type JoinToken struct {
 	ExpiresAt   time.Time
 	UsedAt      *time.Time
 	UsedBy      *uuid.UUID
+}
+
+type Run struct {
+	ID                uuid.UUID
+	Repo              string
+	CloneUrl          string
+	EventType         string
+	Ref               string
+	CommitSha         string
+	Branch            string
+	BaseBranch        string
+	Tag               string
+	Pool              string
+	PipelineSource    string
+	State             string
+	CancelRequestedAt *time.Time
+	CreatedAt         time.Time
+	FinishedAt        *time.Time
 }
 
 type Worker struct {
