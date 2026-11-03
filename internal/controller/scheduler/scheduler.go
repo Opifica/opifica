@@ -53,6 +53,10 @@ type Config struct {
 	Logs *logs.Store
 	// Secrets answers secret requests from jobs. Nil denies them all.
 	Secrets SecretBroker
+	// Credentials returns the read credential for a run's repository, added
+	// to each job when it is handed to a worker (never stored in the job).
+	// Nil means repositories need no credential.
+	Credentials func(ctx context.Context, run uuid.UUID) (*opificav1.Credential, error)
 }
 
 // SecretBroker decides secret requests; see secrets.Manager.
@@ -127,6 +131,8 @@ type RunRequest struct {
 	Pool string
 	// Pipeline is the pipeline file as it is at Event.SHA.
 	Pipeline []byte
+	// RepositoryID links the run to a registered repository, if any.
+	RepositoryID *uuid.UUID
 }
 
 // ErrNotTriggered means the event doesn't match the pipeline's triggers.
@@ -163,7 +169,7 @@ func (s *Scheduler) CreateRun(ctx context.Context, req RunRequest) (db.Run, erro
 		run, err = q.CreateRun(ctx, db.CreateRunParams{
 			ID: runID, Repo: req.Repo, CloneUrl: req.CloneURL, EventType: string(ev.Type), Ref: ev.Ref,
 			CommitSha: ev.SHA, Branch: ev.Branch, BaseBranch: ev.BaseBranch, Tag: ev.Tag,
-			Pool: req.Pool, PipelineSource: string(req.Pipeline),
+			Pool: req.Pool, PipelineSource: string(req.Pipeline), RepositoryID: req.RepositoryID,
 		})
 		if err != nil {
 			return err
@@ -359,6 +365,17 @@ func (s *Scheduler) assignOne(ctx context.Context, w workers.SessionInfo) bool {
 		return true
 	}
 	spec.JobToken = token
+	if s.cfg.Credentials != nil {
+		cred, err := s.cfg.Credentials(ctx, job.RunID)
+		if err != nil {
+			s.log.Error("loading the repository credential; putting the job back", "job", job.ID, "err", err)
+			s.store.UnclaimJob(ctx, db.UnclaimJobParams{ID: job.ID, WorkerID: &w.WorkerID})
+			return false
+		}
+		if cred != nil {
+			spec.Source.Credential = cred
+		}
+	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

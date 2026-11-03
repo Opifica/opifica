@@ -66,7 +66,7 @@ func TestTokenCreateAndJoinOverTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go server.ServeTLS(ctx, ln, api.NewHandler(svc), tlsCfg, svc.Log)
+	go server.ServeTLS(ctx, ln, api.NewHandler(api.Deps{Workers: svc}), tlsCfg, svc.Log)
 
 	// The worker has no CA yet: it accepts the controller only if the
 	// certificate chains to a CA with the pinned fingerprint.

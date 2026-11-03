@@ -19,6 +19,7 @@ import (
 
 	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
 	"github.com/opifica/opifica/internal/agent"
+	"github.com/opifica/opifica/internal/gitmirror"
 )
 
 // checkoutDir is where the agent checks out the repository, relative to its
@@ -28,7 +29,7 @@ const checkoutDir = "src"
 // RunnerConfig configures a Runner.
 type RunnerConfig struct {
 	Pool    *Pool
-	Mirrors *Mirrors
+	Mirrors *gitmirror.Mirrors
 	// Send delivers a message to the controller. It should keep trying
 	// across reconnects; see NewOutbox.
 	Send func(msg *opificav1.ConnectRequest, onSent func())
@@ -232,7 +233,7 @@ func (r *Runner) execute(ctx context.Context, j *runningJob) (int32, *jobError) 
 	r.syslog(j, 0, "Fetching %s at %s", src.GetCloneUrl(), short(src.GetCommitSha()))
 	mirror, err := r.cfg.Mirrors.Ensure(ctx, src.GetCloneUrl(), src.GetCredential(), src.GetCommitSha())
 	switch {
-	case errors.Is(err, ErrCommitNotFound):
+	case errors.Is(err, gitmirror.ErrCommitNotFound):
 		return 0, failed("%v", err)
 	case err != nil:
 		return 0, errored("fetching the repository: %v", err)

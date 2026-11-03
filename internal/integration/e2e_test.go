@@ -39,26 +39,31 @@ type realWorker struct {
 
 func (e *env) realWorker(capacity int) *realWorker {
 	e.t.Helper()
+	return e.realWorkerIn("trusted", capacity)
+}
+
+func (e *env) realWorkerIn(pool string, capacity int) *realWorker {
+	e.t.Helper()
 	if runtime.GOOS == "windows" {
 		e.t.Skip("the test pipelines use a POSIX shell")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		e.t.Skip("git is not installed")
 	}
-	pool := worker.PoolConfig{
+	vms := worker.PoolConfig{
 		Capacity: capacity,
 		Images:   map[string]worker.Image{"default": {Name: "default"}},
 		Warm:     map[string]int{"default": 1},
 	}
 	dir := e.t.TempDir()
-	e.joinInto("trusted", worker.Info(pool, nil), dir)
+	e.joinInto(pool, worker.Info(vms, nil), dir)
 
 	rw := &realWorker{hv: &workertest.Hypervisor{Agent: true}, done: make(chan error, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	rw.cancel = cancel
 	go func() {
 		rw.done <- worker.Run(ctx, worker.Config{
-			ControllerURL: e.url, StateDir: dir, Hypervisor: rw.hv, Pool: pool,
+			ControllerURL: e.url, StateDir: dir, Hypervisor: rw.hv, Pool: vms,
 			AllowLocalRepos: true, HeartbeatInterval: 50 * time.Millisecond, Logger: quiet(),
 		})
 	}()

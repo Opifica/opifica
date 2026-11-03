@@ -1,4 +1,6 @@
-package worker
+// Package gitmirror keeps bare mirrors of repositories on local disk. Workers
+// check jobs out from them, and the controller reads pipeline files from them.
+package gitmirror
 
 import (
 	"bytes"
@@ -157,4 +159,20 @@ func runGit(ctx context.Context, env []string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// ReadFile returns a file's content at a commit of a mirror returned by
+// Ensure. It returns os.ErrNotExist if the commit has no such file.
+func ReadFile(ctx context.Context, mirror, sha, file string) ([]byte, error) {
+	if !commitRe.MatchString(sha) {
+		return nil, fmt.Errorf("invalid commit id %q", sha)
+	}
+	if _, err := runGit(ctx, nil, "-C", mirror, "cat-file", "-e", sha+":"+file); err != nil {
+		return nil, fmt.Errorf("%s at %s: %w", file, sha, os.ErrNotExist)
+	}
+	out, err := runGit(ctx, nil, "-C", mirror, "show", sha+":"+file)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
 }

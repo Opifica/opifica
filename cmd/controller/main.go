@@ -1,9 +1,10 @@
-// Command controller runs the Opifica controller: the API, Git provider
-// integration, pipeline engine, scheduler and secrets broker.
+// Command controller runs the Opifica controller: the API, the repository
+// registry and trigger API, pipeline engine, scheduler and secrets broker.
 //
 // Implemented so far: the database, the built-in certificate authority, join
 // tokens, Join, the Connect stream, the scheduler (runs, jobs, leases,
-// retries, cancellation), job logs and secrets. Git providers come next.
+// retries, cancellation), job logs, secrets, and repositories with routing
+// and triggers.
 package main
 
 import (
@@ -23,13 +24,16 @@ import (
 
 	"github.com/google/uuid"
 
+	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
 	"github.com/opifica/opifica/internal/controller/logs"
+	"github.com/opifica/opifica/internal/controller/repos"
 	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/secrets"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
+	"github.com/opifica/opifica/internal/gitmirror"
 	"github.com/opifica/opifica/internal/server"
 	"github.com/opifica/opifica/internal/version"
 )
@@ -41,7 +45,11 @@ Commands:
   token create   Create a one-time join token for a new build machine
   worker list    List workers
   worker revoke  Revoke a worker; it is disconnected and can't reconnect
-  run create     Start a run from a pipeline file (until Git providers exist)
+  repo create    Register a repository with its routing rules; prints a trigger token
+  repo list      List repositories
+  repo delete    Delete a repository
+  repo token create  Create another trigger token for a repository
+  run create     Start a run from a local pipeline file (for testing)
   run list       List recent runs
   run show       Show a run and its jobs
   run cancel     Cancel a run
@@ -83,6 +91,8 @@ func runWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return runCommand(args[1], args[2:], stdout, stderr)
 	case args[0] == "secret" && len(args) > 1:
 		return secretCommand(args[1], args[2:], stdin, stdout, stderr)
+	case args[0] == "repo" && len(args) > 1:
+		return repoCommand(args[1], args[2:], stdin, stdout, stderr)
 	case args[0] == "version":
 		fmt.Fprintln(stdout, version.Version)
 		return 0
@@ -130,6 +140,7 @@ func serve(args []string, stderr io.Writer) int {
 	var c common
 	c.register(fs)
 	addr := fs.String("addr", ":8443", "address to listen on")
+	allowLocal := fs.Bool("allow-local-repos", false, "allow repositories whose clone URL is a local path (hosted on this machine, or development)")
 	hosts := fs.String("hosts", defaultHosts(), "comma-separated names and IPs workers use to reach the controller")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -158,13 +169,23 @@ func serve(args []string, stderr io.Writer) int {
 		log.Error("loading secrets key", "err", err)
 		return 1
 	}
+	logStore := &logs.Store{Dir: filepath.Join(c.dataDir, "logs")}
+	var reposSvc *repos.Service
 	sched := scheduler.New(svc.Store, svc.Sessions(), log.With("component", "scheduler"), scheduler.Config{
-		Logs:    &logs.Store{Dir: filepath.Join(c.dataDir, "logs")},
+		Logs:    logStore,
 		Secrets: &secrets.Manager{Store: svc.Store, Key: key},
+		Credentials: func(ctx context.Context, run uuid.UUID) (*opificav1.Credential, error) {
+			return reposSvc.RunCredential(ctx, run)
+		},
 	})
+	reposSvc = &repos.Service{
+		Store: svc.Store, Key: key, Scheduler: sched,
+		Mirrors: &gitmirror.Mirrors{Dir: filepath.Join(c.dataDir, "mirrors"), AllowLocal: *allowLocal},
+	}
 	svc.Messages = sched
 	go sched.Run(ctx)
-	if err := server.RunTLS(ctx, *addr, api.NewHandler(svc), tlsCfg, log); err != nil {
+	handler := api.NewHandler(api.Deps{Workers: svc, Repos: reposSvc, Logs: logStore})
+	if err := server.RunTLS(ctx, *addr, handler, tlsCfg, log); err != nil {
 		log.Error("server stopped", "err", err)
 		return 1
 	}

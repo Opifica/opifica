@@ -49,6 +49,17 @@ type JoinToken struct {
 	UsedBy      *uuid.UUID
 }
 
+type Repository struct {
+	ID                   uuid.UUID
+	Name                 string
+	CloneUrl             string
+	Routes               json.RawMessage
+	CredentialCiphertext []byte
+	CredentialNonce      []byte
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
 type Run struct {
 	ID                uuid.UUID
 	Repo              string
@@ -65,6 +76,7 @@ type Run struct {
 	CancelRequestedAt *time.Time
 	CreatedAt         time.Time
 	FinishedAt        *time.Time
+	RepositoryID      *uuid.UUID
 }
 
 type Secret struct {
@@ -90,6 +102,16 @@ type SecretAccess struct {
 	Granted    bool
 	Reason     string
 	At         time.Time
+}
+
+type TriggerToken struct {
+	ID           uuid.UUID
+	RepositoryID uuid.UUID
+	TokenHash    []byte
+	Description  string
+	CreatedAt    time.Time
+	LastUsedAt   *time.Time
+	RevokedAt    *time.Time
 }
 
 type Worker struct {
