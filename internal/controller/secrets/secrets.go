@@ -107,6 +107,17 @@ func (k *Key) seal(name string, value []byte) (ciphertext, nonce []byte, err err
 	return k.aead.Seal(nil, nonce, value, []byte(name)), nonce, nil
 }
 
+// Seal encrypts value for purpose, e.g. "repository-credential:acme/app".
+// Open only succeeds with the same purpose.
+func (k *Key) Seal(purpose string, value []byte) (ciphertext, nonce []byte, err error) {
+	return k.seal(purpose, value)
+}
+
+// Open decrypts a value sealed for purpose.
+func (k *Key) Open(purpose string, ciphertext, nonce []byte) ([]byte, error) {
+	return k.open(purpose, ciphertext, nonce)
+}
+
 func (k *Key) open(name string, ciphertext, nonce []byte) ([]byte, error) {
 	v, err := k.aead.Open(nil, nonce, ciphertext, []byte(name))
 	if err != nil {

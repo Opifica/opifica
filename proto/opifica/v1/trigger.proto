@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package opifica.v1;
+
+option go_package = "github.com/opifica/opifica/gen/opifica/v1;opificav1";
+
+// TriggerService starts runs when code changes. It is called by the git
+// hook Opifica installs in hosted repositories, and by `opifica trigger` in a
+// GitHub Actions workflow for repositories hosted on GitHub.
+//
+// Every call carries a repository's trigger token (Authorization: Bearer),
+// which only works for that repository.
+service TriggerService {
+  // Trigger reports that a ref moved. The controller reads the pipeline file
+  // at the commit, routes the run to a pool with the repository's rules and
+  // schedules it.
+  rpc Trigger(TriggerRequest) returns (TriggerResponse);
+
+  // GetRun returns a run's state and jobs, e.g. for `opifica trigger --wait`.
+  rpc GetRun(GetRunRequest) returns (GetRunResponse);
+
+  // GetJobLog returns a job's output from an offset, so callers can follow it.
+  rpc GetJobLog(GetJobLogRequest) returns (GetJobLogResponse);
+}
+
+message TriggerRequest {
+  // Registered repository name, e.g. "acme/app".
+  string repository = 1;
+  // "push", "tag" or "pull_request".
+  string event = 2;
+  // Full ref: refs/heads/main, refs/tags/v1.0. For pull requests, the ref of
+  // the head branch.
+  string ref = 3;
+  // The exact commit to build.
+  string commit_sha = 4;
+  // Pull requests only: the branch the pull request targets.
+  string base_branch = 5;
+}
+
+message TriggerResponse {
+  // Empty when no run was started; message says why.
+  string run_id = 1;
+  string pool = 2;
+  int32 jobs = 3;
+  string message = 4;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}
+
+message GetRunResponse {
+  // "running", "succeeded", "failed" or "cancelled".
+  string state = 1;
+  repeated JobSummary jobs = 2;
+}
+
+message JobSummary {
+  string id = 1;
+  string name = 2;
+  string os = 3;
+  string state = 4;
+  optional int32 exit_code = 5;
+  string error = 6;
+}
+
+message GetJobLogRequest {
+  string job_id = 1;
+  // Byte offset to read from.
+  int64 offset = 2;
+}
+
+message GetJobLogResponse {
+  bytes data = 1;
+  // Offset to ask for next time.
+  int64 next_offset = 2;
+  // True once the job has finished and data reaches the end of its log.
+  bool complete = 3;
+}

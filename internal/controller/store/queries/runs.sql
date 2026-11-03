@@ -1,6 +1,6 @@
 -- name: CreateRun :one
-INSERT INTO runs (id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO runs (id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, repository_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetRun :one

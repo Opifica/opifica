@@ -22,10 +22,12 @@ import (
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
 	"github.com/opifica/opifica/internal/controller/logs"
+	"github.com/opifica/opifica/internal/controller/repos"
 	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/secrets"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
+	"github.com/opifica/opifica/internal/gitmirror"
 	"github.com/opifica/opifica/internal/server"
 	"github.com/opifica/opifica/internal/testutil/pgtest"
 	"github.com/opifica/opifica/pkg/worker"
@@ -46,6 +48,7 @@ type env struct {
 	sched   *scheduler.Scheduler
 	logs    *logs.Store
 	secrets *secrets.Manager
+	repos   *repos.Service
 	url     string
 }
 
@@ -75,9 +78,15 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	secretMgr := &secrets.Manager{Store: st, Key: key}
+	var repoSvc *repos.Service
 	sched := scheduler.New(st, svc.Sessions(), quiet(), scheduler.Config{
 		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond, Logs: logStore, Secrets: secretMgr,
+		Credentials: func(ctx context.Context, run uuid.UUID) (*opificav1.Credential, error) {
+			return repoSvc.RunCredential(ctx, run)
+		},
 	})
+	repoSvc = &repos.Service{Store: st, Key: key, Scheduler: sched,
+		Mirrors: &gitmirror.Mirrors{Dir: t.TempDir(), AllowLocal: true}}
 	svc.Messages = sched
 	go sched.Run(ctx)
 	tlsCfg, err := api.TLSConfig(authority, []string{"127.0.0.1"})
@@ -90,7 +99,7 @@ func newEnv(t *testing.T) *env {
 	}
 	done := make(chan struct{})
 	go func() {
-		server.ServeTLS(ctx, ln, api.NewHandler(svc), tlsCfg, quiet())
+		server.ServeTLS(ctx, ln, api.NewHandler(api.Deps{Workers: svc, Repos: repoSvc, Logs: logStore}), tlsCfg, quiet())
 		close(done)
 	}()
 	t.Cleanup(func() {
@@ -98,7 +107,7 @@ func newEnv(t *testing.T) *env {
 		<-done
 		st.Close()
 	})
-	return &env{t: t, svc: svc, sched: sched, logs: logStore, secrets: secretMgr, url: "https://" + ln.Addr().String()}
+	return &env{t: t, svc: svc, sched: sched, logs: logStore, secrets: secretMgr, repos: repoSvc, url: "https://" + ln.Addr().String()}
 }
 
 func info() *opificav1.WorkerInfo {

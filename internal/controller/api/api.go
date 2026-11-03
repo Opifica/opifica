@@ -11,15 +11,28 @@ import (
 	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
 	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
 	"github.com/opifica/opifica/internal/controller/ca"
+	"github.com/opifica/opifica/internal/controller/logs"
+	"github.com/opifica/opifica/internal/controller/repos"
 	"github.com/opifica/opifica/internal/controller/workers"
 	"github.com/opifica/opifica/internal/server"
 )
 
+// Deps are the services behind the API.
+type Deps struct {
+	Workers *workers.Service
+	// Repos and Logs serve the TriggerService; without Repos it is off.
+	Repos *repos.Service
+	Logs  *logs.Store
+}
+
 // NewHandler returns the controller's HTTP handler.
-func NewHandler(svc *workers.Service) http.Handler {
+func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.Health)
-	mux.Handle(opificav1connect.NewWorkerServiceHandler(&workerHandler{svc: svc}))
+	mux.Handle(opificav1connect.NewWorkerServiceHandler(&workerHandler{svc: d.Workers}))
+	if d.Repos != nil {
+		mux.Handle(opificav1connect.NewTriggerServiceHandler(&triggerHandler{repos: d.Repos, logs: d.Logs}))
+	}
 	return workers.WithPeerCert(mux)
 }
 

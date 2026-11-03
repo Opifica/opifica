@@ -179,9 +179,9 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) error {
 }
 
 const createRun = `-- name: CreateRun :one
-INSERT INTO runs (id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at
+INSERT INTO runs (id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, repository_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at, repository_id
 `
 
 type CreateRunParams struct {
@@ -196,6 +196,7 @@ type CreateRunParams struct {
 	Tag            string
 	Pool           string
 	PipelineSource string
+	RepositoryID   *uuid.UUID
 }
 
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, error) {
@@ -211,6 +212,7 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		arg.Tag,
 		arg.Pool,
 		arg.PipelineSource,
+		arg.RepositoryID,
 	)
 	var i Run
 	err := row.Scan(
@@ -229,6 +231,7 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (Run, erro
 		&i.CancelRequestedAt,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RepositoryID,
 	)
 	return i, err
 }
@@ -331,7 +334,7 @@ WHERE r.id = $1 AND r.state = 'running'
   AND NOT EXISTS (
       SELECT 1 FROM jobs j
       WHERE j.run_id = r.id AND j.state IN ('pending', 'queued', 'assigned', 'running'))
-RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at
+RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at, repository_id
 `
 
 // Closes the run once no job can change state any more.
@@ -354,6 +357,7 @@ func (q *Queries) FinishRunIfDone(ctx context.Context, id uuid.UUID) (Run, error
 		&i.CancelRequestedAt,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RepositoryID,
 	)
 	return i, err
 }
@@ -394,7 +398,7 @@ func (q *Queries) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 }
 
 const getRun = `-- name: GetRun :one
-SELECT id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at FROM runs WHERE id = $1
+SELECT id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at, repository_id FROM runs WHERE id = $1
 `
 
 func (q *Queries) GetRun(ctx context.Context, id uuid.UUID) (Run, error) {
@@ -416,6 +420,7 @@ func (q *Queries) GetRun(ctx context.Context, id uuid.UUID) (Run, error) {
 		&i.CancelRequestedAt,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RepositoryID,
 	)
 	return i, err
 }
@@ -502,7 +507,7 @@ func (q *Queries) ListRunJobs(ctx context.Context, runID uuid.UUID) ([]Job, erro
 }
 
 const listRuns = `-- name: ListRuns :many
-SELECT id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT $1
+SELECT id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at, repository_id FROM runs ORDER BY created_at DESC LIMIT $1
 `
 
 func (q *Queries) ListRuns(ctx context.Context, limit int32) ([]Run, error) {
@@ -530,6 +535,7 @@ func (q *Queries) ListRuns(ctx context.Context, limit int32) ([]Run, error) {
 			&i.CancelRequestedAt,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.RepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -665,7 +671,7 @@ func (q *Queries) RenewLeases(ctx context.Context, arg RenewLeasesParams) error 
 const requestRunCancel = `-- name: RequestRunCancel :one
 UPDATE runs SET cancel_requested_at = now()
 WHERE id = $1 AND state = 'running' AND cancel_requested_at IS NULL
-RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at
+RETURNING id, repo, clone_url, event_type, ref, commit_sha, branch, base_branch, tag, pool, pipeline_source, state, cancel_requested_at, created_at, finished_at, repository_id
 `
 
 func (q *Queries) RequestRunCancel(ctx context.Context, id uuid.UUID) (Run, error) {
@@ -687,6 +693,7 @@ func (q *Queries) RequestRunCancel(ctx context.Context, id uuid.UUID) (Run, erro
 		&i.CancelRequestedAt,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RepositoryID,
 	)
 	return i, err
 }

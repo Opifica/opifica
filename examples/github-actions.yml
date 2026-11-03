@@ -1,0 +1,36 @@
+# Runs Opifica for a repository hosted on GitHub.
+#
+# Copy to .github/workflows/opifica.yml. In the repository's settings, add:
+#   variables: OPIFICA_CONTROLLER (https://your-controller:8443)
+#              OPIFICA_CA_FINGERPRINT (sha256:..., from `controller token create`)
+#   secret:    OPIFICA_TRIGGER_TOKEN (from `controller repo create` or `repo token create`)
+#
+# The controller must be reachable from the runner: run this on a self-hosted
+# runner inside your network, or expose the controller's port.
+#
+# The step passes or fails with the Opifica run, prints its output, and adds
+# a summary table to the workflow run.
+name: Opifica
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  opifica:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+      # Until signed release binaries exist (see docs/ROADMAP.md, M4).
+      - run: go install github.com/opifica/opifica/cmd/opifica@main
+      - run: opifica trigger -wait
+        env:
+          OPIFICA_CONTROLLER: ${{ vars.OPIFICA_CONTROLLER }}
+          OPIFICA_CA_FINGERPRINT: ${{ vars.OPIFICA_CA_FINGERPRINT }}
+          OPIFICA_REPO: ${{ github.repository }}
+          OPIFICA_TRIGGER_TOKEN: ${{ secrets.OPIFICA_TRIGGER_TOKEN }}

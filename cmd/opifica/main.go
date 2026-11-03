@@ -22,16 +22,22 @@ Commands:
   validate [file]   Check a pipeline file (default: .opifica/pipeline.yaml)
   plan [file]       Show which jobs an event would run
   schema            Print the JSON Schema for pipeline files
+  trigger           Start a run on the controller (e.g. from GitHub Actions)
+  hook post-receive Git hook for hosted repositories: start runs for pushes
   version           Print the version
 
 Run "opifica <command> -h" for a command's options.
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(runWithInput(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithInput(args, strings.NewReader(""), stdout, stderr)
+}
+
+func runWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -41,6 +47,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return validate(args[1:], stdout, stderr)
 	case "plan":
 		return plan(args[1:], stdout, stderr)
+	case "trigger":
+		return trigger(args[1:], stdout, stderr)
+	case "hook":
+		return hook(args[1:], stdin, stdout)
 	case "schema":
 		stdout.Write(schema.Pipeline)
 		return 0

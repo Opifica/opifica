@@ -5,7 +5,8 @@ where every job runs in a fresh virtual machine.
 
 > **Status:** early development. A pipeline runs end to end: the controller schedules its jobs, a worker checks
 > out the exact commit and runs each job's commands through the agent with the secrets the admin allows, and
-> the output is stored. Real VMs and Git providers come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> the output is stored. Runs start from a `git push`, to your own git server or to GitHub. Real VMs and
+> Opifica-hosted repositories come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 > See the [organisation page](https://github.com/opifica) for the architecture.
 
 ## What lives here
@@ -14,7 +15,7 @@ where every job runs in a fresh virtual machine.
 |---|---|---|
 | `internal/pipeline` | The pipeline language: YAML parser, validation, CEL conditions, matrix expansion, planning | Working |
 | `schema/` | JSON Schema for pipeline files, for editor autocompletion | Working |
-| `cmd/opifica` | CLI: `validate`, `plan`, `schema` | Working |
+| `cmd/opifica` | CLI: `validate`, `plan`, `schema`, `trigger`, `hook` | Working |
 | `proto/` | API definitions: worker ↔ controller, worker ↔ guest agent (Protobuf, ConnectRPC) | Draft |
 | `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, controller client, Git mirrors, job runner, `worker.Run` | Working |
 | `pkg/worker/workertest` | Fake hypervisor for testing worker code without VMs | Working |
@@ -22,7 +23,9 @@ where every job runs in a fresh virtual machine.
 | `internal/controller/scheduler` | Runs and jobs, matching jobs to workers, leases, retries, cancellation | Working |
 | `internal/controller/logs` | Job output on the controller's disk | Working |
 | `internal/controller/secrets` | Encrypted secrets, handed only to jobs the admin's policy allows; every request audited | Working |
-| | Git providers, admin API | Not started |
+| `internal/controller/repos` | Repositories, routing rules (event + ref → pool), trigger tokens; the trigger API | Working |
+| `cmd/opifica` `trigger`, `hook` | Start runs from GitHub Actions, or from the git hook of a bare repository | Working |
+| | Hosted repositories (opifica-git), admin API | Not started |
 | `cmd/agent`, `internal/agent` | Runs inside each VM: checkout, running steps, masking secrets in output, killing process trees on cancel and timeout | Working |
 | `cmd/devworker` | A worker without VMs for trying Opifica on one machine (no isolation) | Working |
 | `cmd/signer` | Signing service for release artifacts | Not started |
@@ -140,12 +143,52 @@ bin/controller serve -addr 127.0.0.1:8443 &       # TLS; keep it running
 bin/devworker join -controller https://127.0.0.1:8443 -token opj_... -ca-fingerprint sha256:...
 bin/devworker run  -controller https://127.0.0.1:8443 &
 
-# Until Git providers exist, start runs by hand:
-bin/controller run create -repo acme/app -clone-url "$PWD" -pool trusted \
-    -sha "$(git rev-parse HEAD)" -file .opifica/pipeline.yaml
-bin/controller run show <run-id>
+# Register a repository; prints its trigger token
+bin/controller repo create acme/app -clone-url "$PWD" -route push:main=trusted -route '*=untrusted'
+
+# Start a run for the current branch and commit, and follow it
+export OPIFICA_CONTROLLER=https://127.0.0.1:8443 OPIFICA_CA_FINGERPRINT=sha256:... \
+       OPIFICA_REPO=acme/app OPIFICA_TRIGGER_TOKEN=opr_...
+bin/opifica trigger -wait
+
+bin/controller run list
 bin/controller run logs <run-id>
 ```
+
+The controller needs `-allow-local-repos` to build from a local path like `$PWD`.
+
+### Triggering runs
+
+A run starts when a ref moves: a push to a branch, a tag, or a pull request. The controller reads
+`.opifica/pipeline.yaml` at that commit itself, and the repository's **routes** decide the pool. The first matching
+route wins, and an event no route matches starts nothing:
+
+```sh
+bin/controller repo create acme/app -clone-url ssh://git@git.example/acme/app.git \
+    -route push:main=trusted -route tag:v*=release -route pull_request=untrusted
+```
+
+**Your own git server.** Install the hook in the bare repository as `hooks/post-receive`:
+
+```sh
+#!/bin/sh
+export OPIFICA_CONTROLLER=https://ci.example:8443 OPIFICA_CA_FINGERPRINT=sha256:... OPIFICA_REPO=acme/app
+export OPIFICA_TRIGGER_TOKEN="$(cat /etc/opifica/acme-app.token)"
+exec opifica hook post-receive
+```
+
+Each push then prints the runs it started:
+
+```console
+$ git push origin main
+remote: opifica: main: run 0b6f… started in pool trusted (3 jobs)
+```
+
+Opifica-hosted repositories, where creating a repository sets this up for you, are on the roadmap.
+
+**GitHub.** Add [`examples/github-actions.yml`](examples/github-actions.yml) as a workflow. Its step runs
+`opifica trigger -wait`, which passes or fails with the Opifica run and prints its output. For a private
+repository, register it with `-credential-stdin` and a read-only token.
 
 ### Secrets
 

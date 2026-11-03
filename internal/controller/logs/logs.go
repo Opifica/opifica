@@ -99,3 +99,22 @@ func (s *Store) Open(job uuid.UUID) (io.ReadCloser, error) {
 	}
 	return f, err
 }
+
+// ReadFrom returns up to max bytes of a job's log starting at offset, and
+// the offset to continue from.
+func (s *Store) ReadFrom(job uuid.UUID, offset int64, max int) ([]byte, int64, error) {
+	f, err := os.Open(s.path(job))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	buf := make([]byte, max)
+	n, err := f.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, offset, err
+	}
+	return buf[:n], offset + int64(n), nil
+}

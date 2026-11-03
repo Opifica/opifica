@@ -3,9 +3,9 @@
 Where Opifica is and what comes next. Each milestone ends in something that can be run and tested.
 Tick items off as they land.
 
-**Defaults chosen for now** (can be revisited):
-first Git provider is **Forgejo/Gitea**, **Linux** VMs come before Windows and macOS, and logs are stored on the
-**controller's local disk** until S3 storage is added.
+**Decisions so far:** repositories live on **your own git server** (bare repositories managed by Opifica) or on
+**GitHub** (runs triggered from a GitHub Actions step); there are no forge integrations. **Linux** VMs come before
+Windows and macOS, and logs are stored on the **controller's disk** until S3 storage is added.
 
 ## M0 · Foundations ✅
 
@@ -63,16 +63,22 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 - [x] Integration test: controller + PostgreSQL + worker (fake hypervisor) + real agent, in CI
 - [x] Failure tests: worker killed mid-job, lease expiry, reconnect, denied secret
 
-## M2 · Triggered by Git
+## M2 · Triggered by git: your own server or GitHub
 
-**Goal:** a push to a Forgejo repository starts a run, and the commit shows its status.
+**Goal:** a `git push` starts a run, whether the repository is hosted by Opifica or on GitHub.
 
-- [ ] Provider interface and Forgejo/Gitea provider: webhooks with signature checks, `FetchFile` at a commit,
-  short-lived clone credentials, commit status
-- [ ] Routing events to pools from the admin config (pull requests → `untrusted`, `main` → `trusted`,
-  tags → `release`)
-- [ ] Integration test against a Forgejo container
-- [ ] `docker compose` dev environment: PostgreSQL, Forgejo, controller, worker
+- [x] Repository registry: clone URL, routing rules (event + ref → pool, first match wins), trigger tokens
+  (`controller repo create|list|delete|token create`)
+- [x] Trigger API; the controller reads the pipeline file at the commit itself and picks the pool from the
+  repository's rules
+- [x] `opifica hook post-receive`: the git hook for bare repositories; prints the run for the pusher
+- [x] `opifica trigger -wait` for GitHub Actions: passes or fails with the run, prints its output, writes a
+  step summary ([example workflow](../examples/github-actions.yml))
+- [x] Optional read credential per repository, encrypted, given to workers with each job
+- [ ] **opifica-git**: create a repository through the API or CLI, which creates the bare repository and installs
+  the hook; serves git to developers (HTTPS and/or SSH: to decide); users and access tokens
+- [ ] Workers fetch hosted repositories with short-lived, read-only tokens
+- [ ] `docker compose` dev environment: PostgreSQL, controller, opifica-git, devworker
 
 ## M3 · Real Linux VMs
 
@@ -113,7 +119,6 @@ Needs self-hosted hardware: an Apple silicon Mac and a Windows machine with Hype
 ## M7 · Everything else
 
 - [ ] Web UI (Angular): runs, live logs, test results, workers, administration
-- [ ] GitHub and GitLab providers; plain Git with polling
 - [ ] GitOps sync of the admin config from a Git repository
 - [ ] S3-compatible storage for logs and artifacts
 - [ ] OIDC login; OpenBao/Vault as a secrets backend

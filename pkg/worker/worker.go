@@ -12,6 +12,7 @@ import (
 	"time"
 
 	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
+	"github.com/opifica/opifica/internal/gitmirror"
 	"github.com/opifica/opifica/internal/version"
 )
 
@@ -28,7 +29,7 @@ type Config struct {
 	Labels map[string]string
 	// GuestMirrorURL: see RunnerConfig.
 	GuestMirrorURL func(vm VM, hostPath string) (string, error)
-	// AllowLocalRepos: see Mirrors.AllowLocal. Development only.
+	// AllowLocalRepos: see gitmirror.Mirrors.AllowLocal. Development only.
 	AllowLocalRepos bool
 	// HeartbeatInterval: see ClientConfig.
 	HeartbeatInterval time.Duration
@@ -89,7 +90,7 @@ func Run(ctx context.Context, cfg Config) error {
 	var outbox *Outbox
 	runner := NewRunner(RunnerConfig{
 		Pool:           pool,
-		Mirrors:        &Mirrors{Dir: filepath.Join(cfg.StateDir, "mirrors"), AllowLocal: cfg.AllowLocalRepos},
+		Mirrors:        &gitmirror.Mirrors{Dir: filepath.Join(cfg.StateDir, "mirrors"), AllowLocal: cfg.AllowLocalRepos},
 		Send:           func(m *opificav1.ConnectRequest, onSent func()) { outbox.Send(m, onSent) },
 		GuestMirrorURL: cfg.GuestMirrorURL,
 		Logger:         log,
