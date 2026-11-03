@@ -140,3 +140,39 @@ func TestUsage(t *testing.T) {
 		t.Errorf("token create without -pool: exit %d", code)
 	}
 }
+
+func TestRunCommands(t *testing.T) {
+	dbURL := pgtest.New(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "pipeline.yaml")
+	os.WriteFile(file, []byte("on: push\njobs:\n  build:\n    runs-on: linux\n    steps: [{ run: make }]\n  deploy:\n    needs: build\n    runs-on: linux\n    steps: [{ run: make deploy }]\n"), 0o644)
+	common := []string{"-database-url", dbURL, "-data-dir", dir}
+
+	var out, errOut bytes.Buffer
+	if code := run(append([]string{"run", "create", "-repo", "acme/app", "-pool", "trusted", "-sha", "abc123", "-file", file}, common...), &out, &errOut); code != 0 {
+		t.Fatalf("run create: exit %d: %s", code, errOut.String())
+	}
+	id := regexp.MustCompile(`Run (\S+) created with 2 job\(s\)`).FindStringSubmatch(out.String())
+	if id == nil {
+		t.Fatalf("run create output: %s", out.String())
+	}
+
+	out.Reset()
+	if code := run(append([]string{"run", "list"}, common...), &out, &errOut); code != 0 || !regexp.MustCompile(`acme/app\s+push\s+main\s+abc123\s+trusted\s+running`).MatchString(out.String()) {
+		t.Errorf("run list (exit %d):\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run(append([]string{"run", "show", id[1]}, common...), &out, &errOut); code != 0 ||
+		!regexp.MustCompile(`build\s+linux\s+queued`).MatchString(out.String()) || !regexp.MustCompile(`deploy\s+linux\s+pending`).MatchString(out.String()) {
+		t.Errorf("run show (exit %d):\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run(append([]string{"run", "cancel", id[1]}, common...), &out, &errOut); code != 0 {
+		t.Errorf("run cancel: exit %d: %s", code, errOut.String())
+	}
+	out.Reset()
+	run(append([]string{"run", "show", id[1]}, common...), &out, &errOut)
+	if !regexp.MustCompile(`: cancelled`).MatchString(out.String()) {
+		t.Errorf("after cancel:\n%s", out.String())
+	}
+}

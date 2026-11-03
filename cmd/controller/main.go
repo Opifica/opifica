@@ -2,8 +2,8 @@
 // integration, pipeline engine, scheduler and secrets broker.
 //
 // Implemented so far: the database, the built-in certificate authority, join
-// tokens, Join and the Connect stream (sessions, heartbeats, revocation).
-// Scheduling comes next.
+// tokens, Join, the Connect stream, and the scheduler (runs, jobs, leases,
+// retries, cancellation). Logs, secrets and Git providers come next.
 package main
 
 import (
@@ -24,6 +24,7 @@ import (
 
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
+	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
 	"github.com/opifica/opifica/internal/server"
@@ -37,6 +38,10 @@ Commands:
   token create   Create a one-time join token for a new build machine
   worker list    List workers
   worker revoke  Revoke a worker; it is disconnected and can't reconnect
+  run create     Start a run from a pipeline file (until Git providers exist)
+  run list       List recent runs
+  run show       Show a run and its jobs
+  run cancel     Cancel a run
   version        Print the version
 
 Common options (or environment variables):
@@ -62,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return workerList(args[2:], stdout, stderr)
 	case args[0] == "worker" && len(args) > 1 && args[1] == "revoke":
 		return workerRevoke(args[2:], stdout, stderr)
+	case args[0] == "run" && len(args) > 1:
+		return runCommand(args[1], args[2:], stdout, stderr)
 	case args[0] == "version":
 		fmt.Fprintln(stdout, version.Version)
 		return 0
@@ -132,6 +139,9 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	log.Info("certificate authority ready", "fingerprint", svc.CA.Fingerprint())
+	sched := scheduler.New(svc.Store, svc.Sessions(), log.With("component", "scheduler"), scheduler.Config{})
+	svc.Messages = sched
+	go sched.Run(ctx)
 	if err := server.RunTLS(ctx, *addr, api.NewHandler(svc), tlsCfg, log); err != nil {
 		log.Error("server stopped", "err", err)
 		return 1
@@ -257,16 +267,17 @@ func workerRevoke(args []string, stdout, stderr io.Writer) int {
 	var c common
 	c.register(fs)
 	fs.Usage = func() { fmt.Fprintln(stderr, "Usage: controller worker revoke [options] <worker-id>") }
-	if err := fs.Parse(args); err != nil {
+	pos, err := parseWithArgs(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 {
+	if len(pos) != 1 {
 		fs.Usage()
 		return 2
 	}
-	id, err := uuid.Parse(fs.Arg(0))
+	id, err := uuid.Parse(pos[0])
 	if err != nil {
-		fmt.Fprintf(stderr, "controller: invalid worker id %q\n", fs.Arg(0))
+		fmt.Fprintf(stderr, "controller: invalid worker id %q\n", pos[0])
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
