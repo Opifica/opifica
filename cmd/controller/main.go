@@ -2,28 +2,27 @@
 // integration, pipeline engine, scheduler and secrets broker.
 //
 // Implemented so far: the database, the built-in certificate authority, join
-// tokens and Join. Every other RPC returns "unimplemented".
+// tokens, Join and the Connect stream (sessions, heartbeats, revocation).
+// Scheduling comes next.
 package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
-	"connectrpc.com/connect"
+	"github.com/google/uuid"
 
-	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
-	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
+	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
@@ -36,6 +35,8 @@ const usage = `Usage: controller <command> [options]
 Commands:
   serve          Run the controller
   token create   Create a one-time join token for a new build machine
+  worker list    List workers
+  worker revoke  Revoke a worker; it is disconnected and can't reconnect
   version        Print the version
 
 Common options (or environment variables):
@@ -57,6 +58,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return serve(args[1:], stderr)
 	case args[0] == "token" && len(args) > 1 && args[1] == "create":
 		return tokenCreate(args[2:], stdout, stderr)
+	case args[0] == "worker" && len(args) > 1 && args[1] == "list":
+		return workerList(args[2:], stdout, stderr)
+	case args[0] == "worker" && len(args) > 1 && args[1] == "revoke":
+		return workerRevoke(args[2:], stdout, stderr)
 	case args[0] == "version":
 		fmt.Fprintln(stdout, version.Version)
 		return 0
@@ -121,40 +126,17 @@ func serve(args []string, stderr io.Writer) int {
 	defer closeFn()
 	svc.Log = log
 
-	tlsCfg, err := tlsConfig(svc.CA, splitList(*hosts))
+	tlsCfg, err := api.TLSConfig(svc.CA, splitList(*hosts))
 	if err != nil {
 		log.Error("issuing server certificate", "err", err)
 		return 1
 	}
 	log.Info("certificate authority ready", "fingerprint", svc.CA.Fingerprint())
-	if err := server.RunTLS(ctx, *addr, newHandler(svc), tlsCfg, log); err != nil {
+	if err := server.RunTLS(ctx, *addr, api.NewHandler(svc), tlsCfg, log); err != nil {
 		log.Error("server stopped", "err", err)
 		return 1
 	}
 	return 0
-}
-
-// tlsConfig issues a fresh server certificate and accepts, but doesn't yet
-// require, worker client certificates: Join is called before a worker has
-// one. RPCs that need a worker identity check it themselves.
-func tlsConfig(authority *ca.CA, hosts []string) (*tls.Config, error) {
-	certPEM, keyPEM, err := authority.IssueServerCert(hosts)
-	if err != nil {
-		return nil, err
-	}
-	// Send the CA too, so a joining worker can check it against the pinned
-	// fingerprint before it has the CA bundle.
-	certPEM = append(certPEM, authority.CertPEM()...)
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{pair},
-		ClientCAs:    authority.Pool(),
-		ClientAuth:   tls.VerifyClientCertIfGiven,
-		MinVersion:   tls.VersionTLS13,
-	}, nil
 }
 
 func defaultHosts() string {
@@ -173,27 +155,6 @@ func splitList(s string) []string {
 		}
 	}
 	return out
-}
-
-func newHandler(svc *workers.Service) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", server.Health)
-	mux.Handle(opificav1connect.NewWorkerServiceHandler(&workerHandler{svc: svc}))
-	return mux
-}
-
-// workerHandler implements the API workers connect to.
-type workerHandler struct {
-	opificav1connect.UnimplementedWorkerServiceHandler
-	svc *workers.Service
-}
-
-func (h *workerHandler) Join(ctx context.Context, req *connect.Request[opificav1.JoinRequest]) (*connect.Response[opificav1.JoinResponse], error) {
-	resp, err := h.svc.Join(ctx, req.Msg)
-	if err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(resp), nil
 }
 
 type labelFlag map[string]string
@@ -250,5 +211,76 @@ CA fingerprint (the worker checks the controller against it):
 
 The token is shown only once.
 `, *pool, tok.ExpiresAt.Format(time.RFC3339), tok.Secret, tok.CAFingerprint)
+	return 0
+}
+
+func workerList(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("worker list", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var c common
+	c.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	svc, closeFn, err := c.open(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "controller: %v\n", err)
+		return 1
+	}
+	defer closeFn()
+	ws, err := svc.Store.ListWorkers(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "controller: %v\n", err)
+		return 1
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tHOSTNAME\tOS\tARCH\tPOOL\tJOBS\tLAST SEEN\tSTATUS")
+	for _, w := range ws {
+		seen, status := "never", "active"
+		if w.LastSeenAt != nil {
+			seen = time.Since(*w.LastSeenAt).Round(time.Second).String() + " ago"
+		}
+		if w.RevokedAt != nil {
+			status = "revoked"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", w.ID, w.Hostname, w.Os, w.Arch, w.Pool, w.MaxConcurrentJobs, seen, status)
+	}
+	tw.Flush()
+	return 0
+}
+
+func workerRevoke(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("worker revoke", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var c common
+	c.register(fs)
+	fs.Usage = func() { fmt.Fprintln(stderr, "Usage: controller worker revoke [options] <worker-id>") }
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return 2
+	}
+	id, err := uuid.Parse(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "controller: invalid worker id %q\n", fs.Arg(0))
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	svc, closeFn, err := c.open(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "controller: %v\n", err)
+		return 1
+	}
+	defer closeFn()
+	if err := svc.Revoke(ctx, id); err != nil {
+		fmt.Fprintf(stderr, "controller: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Worker %s revoked. A connected controller disconnects it within %v.\n", id, workers.DefaultTouchInterval)
 	return 0
 }

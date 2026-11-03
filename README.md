@@ -3,8 +3,9 @@
 Core of [Opifica](https://github.com/opifica), an open-source CI/CD system built in the EU
 where every job runs in a fresh virtual machine.
 
-> **Status:** early development. The pipeline language, the API definitions and the worker kit's warm pool
-> work and are tested. The controller, agent and signer are skeletons.
+> **Status:** early development. Working and tested: the pipeline language, the worker kit's warm pool, and
+> workers joining and staying connected to the controller. Scheduling and the agent come next; see
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 > See the [organisation page](https://github.com/opifica) for the architecture.
 
 ## What lives here
@@ -15,9 +16,10 @@ where every job runs in a fresh virtual machine.
 | `schema/` | JSON Schema for pipeline files, for editor autocompletion | Working |
 | `cmd/opifica` | CLI: `validate`, `plan`, `schema` | Working |
 | `proto/` | API definitions: worker ↔ controller, worker ↔ guest agent (Protobuf, ConnectRPC) | Draft |
-| `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, image verification | Working |
+| `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, image verification, controller client | Working |
 | `pkg/worker/workertest` | Fake hypervisor for testing worker code without VMs | Working |
-| `cmd/controller` | API, Git providers, pipeline engine, scheduler, secrets broker | Skeleton |
+| `cmd/controller` | Join tokens, worker joining over TLS, the Connect stream, worker revocation | Working |
+| | Scheduler, runs, logs, secrets, Git providers | Not started |
 | `cmd/agent` | Runs inside each VM, executes steps, streams logs and results | Skeleton |
 | `cmd/signer` | Signing service for release artifacts | Not started |
 
@@ -111,9 +113,22 @@ broken.yaml:11:5: unknown field "secret"
 Requires Go 1.27 or later.
 
 ```sh
-make tools      # install buf and the protoc plugins (once)
+make tools      # install buf, the protoc plugins and sqlc (once)
 make            # lint, test and build into bin/
-make generate   # after changing proto/; generated code in gen/ is committed
+make generate   # after changing proto/ or SQL queries; generated code is committed
+```
+
+Database tests need PostgreSQL. Either set `OPIFICA_TEST_DATABASE_URL` to a server the tests may create databases
+on, or install the PostgreSQL server binaries (e.g. `apt install postgresql-17`): the tests then start their own
+throwaway server. Without either, those tests are skipped.
+
+### Trying the controller
+
+```sh
+export OPIFICA_DATABASE_URL=postgres://localhost/opifica
+go run ./cmd/controller token create -pool trusted   # prints a join token and the CA fingerprint
+go run ./cmd/controller serve                        # TLS on :8443
+go run ./cmd/controller worker list
 ```
 
 ## Stack
