@@ -7,6 +7,44 @@ Tick items off as they land.
 **GitHub** (runs triggered from a GitHub Actions step); there are no forge integrations. **Linux** VMs come before
 Windows and macOS, and logs are stored on the **controller's disk** until S3 storage is added.
 
+## Where we are (2026-11-03)
+
+A pipeline runs end to end. A `git push` to a bare repository with the Opifica hook, or a GitHub Actions step running
+`opifica trigger`, starts a run. The controller reads the pipeline at that commit, routes it to a pool, and schedules
+its jobs on matching workers. Workers check out the exact commit in a fresh environment and run the steps through the
+agent, with the secrets the admin's policy allows. The output is stored and readable with `controller run logs` or
+`opifica trigger -wait`. Every job still runs in **devworker**, with **no VM isolation**: real VM drivers are M3.
+
+### Next, in order
+
+1. **Worker certificate renewal.** Worker certificates expire after 30 days and nothing renews them yet, so a
+   worker stops connecting a month after joining. Small, and urgent before any real use.
+2. **opifica-git** (M2): creating a repository makes the bare repository and installs the hook; developers push
+   to it. Needs decisions 1 and 2 below.
+3. **worker-linux with Firecracker** (M3): the first real isolation. Needs a Linux machine with `/dev/kvm`; the
+   development machine has it.
+4. **Releases** (M4): `v0.x` tags so the worker repositories can depend on core, plus signed binaries so the
+   GitHub workflow doesn't need `go install`.
+5. The rest of M1: an admin API, so the `opifica` CLI and the web UI work remotely; storing test reports and
+   artifacts (those steps are skipped with a note for now).
+
+### Decisions needed
+
+1. **How developers push to opifica-git:** HTTPS with access tokens, SSH with keys (an SSH server in Go, no
+   system sshd), or both. Recommended: HTTPS first, then SSH.
+2. **Who may create repositories and push:** proposed: users and tokens managed by the admin through the CLI,
+   with read or write access per repository; login through your identity provider (OIDC) later, with the web UI.
+3. **How GitHub runners reach the controller:** expose the controller's port, or use a self-hosted runner
+   inside your network.
+4. **Hardware for Windows and macOS workers** (M6): an Apple silicon Mac and a Windows machine with Hyper-V.
+
+### Known limitations
+
+- Log deduplication is kept in memory: after a controller restart, a resent log chunk can appear twice.
+- The controller issues itself a new server certificate at every start (workers trust the CA, so this is fine).
+- Windows: cancelling a step kills the step's process but not its children yet (needs job objects).
+- Repository credentials: tokens only; SSH keys aren't supported yet.
+
 ## M0 · Foundations ✅
 
 - [x] Organisation, repositories, EUPL-1.2 licence, architecture page
