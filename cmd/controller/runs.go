@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/store/db"
 	"github.com/opifica/opifica/internal/pipeline"
@@ -28,6 +31,8 @@ func runCommand(sub string, args []string, stdout, stderr io.Writer) int {
 		return runShow(args, stdout, stderr)
 	case "cancel":
 		return runCancel(args, stdout, stderr)
+	case "logs":
+		return runLogs(args, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "controller: unknown command \"run %s\"\n\n%s", sub, usage)
 	return 2
@@ -232,4 +237,48 @@ func short(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+func runLogs(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("run logs", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var c common
+	c.register(fs)
+	only := fs.String("job", "", "show only this job (its key, e.g. test[os=linux], or its name)")
+	id, ok := runIDArg(fs, args, stderr, "logs")
+	if !ok {
+		return 2
+	}
+	store := &logs.Store{Dir: filepath.Join(c.dataDir, "logs")}
+	return withScheduler(c, stderr, func(ctx context.Context, _ *scheduler.Scheduler, q *db.Queries) error {
+		jobs, err := q.ListRunJobs(ctx, id)
+		if err != nil {
+			return err
+		}
+		shown := 0
+		for _, j := range jobs {
+			if *only != "" && j.Key != *only && j.Name != *only {
+				continue
+			}
+			shown++
+			fmt.Fprintf(stdout, "---- %s (%s, %s) ----\n", j.Name, j.Os, j.State)
+			r, err := store.Open(j.ID)
+			if errors.Is(err, logs.ErrNoLog) {
+				fmt.Fprintln(stdout, "(no output)")
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(stdout, r)
+			r.Close()
+			if err != nil {
+				return err
+			}
+		}
+		if *only != "" && shown == 0 {
+			return fmt.Errorf("run %s has no job %q", id, *only)
+		}
+		return nil
+	})
 }

@@ -3,9 +3,9 @@
 Core of [Opifica](https://github.com/opifica), an open-source CI/CD system built in the EU
 where every job runs in a fresh virtual machine.
 
-> **Status:** early development. Working and tested: the pipeline language, the worker kit's warm pool,
-> workers joining and staying connected to the controller, and scheduling runs onto them. The job runner and
-> agent come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status:** early development. A pipeline runs end to end: the controller schedules its jobs, a worker checks
+> out the exact commit and runs each job's commands through the agent, and the output is stored. Real VMs,
+> secrets and Git providers come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 > See the [organisation page](https://github.com/opifica) for the architecture.
 
 ## What lives here
@@ -16,12 +16,14 @@ where every job runs in a fresh virtual machine.
 | `schema/` | JSON Schema for pipeline files, for editor autocompletion | Working |
 | `cmd/opifica` | CLI: `validate`, `plan`, `schema` | Working |
 | `proto/` | API definitions: worker ↔ controller, worker ↔ guest agent (Protobuf, ConnectRPC) | Draft |
-| `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, image verification, controller client | Working |
+| `pkg/worker` | Shared worker kit: `Hypervisor` interface, warm VM pool, controller client, Git mirrors, job runner, `worker.Run` | Working |
 | `pkg/worker/workertest` | Fake hypervisor for testing worker code without VMs | Working |
 | `cmd/controller` | Join tokens, worker joining over TLS, the Connect stream, worker revocation | Working |
 | `internal/controller/scheduler` | Runs and jobs, matching jobs to workers, leases, retries, cancellation | Working |
-| | Logs, secrets, Git providers, admin API | Not started |
-| `cmd/agent` | Runs inside each VM, executes steps, streams logs and results | Skeleton |
+| `internal/controller/logs` | Job output on the controller's disk | Working |
+| | Secrets, Git providers, admin API | Not started |
+| `cmd/agent`, `internal/agent` | Runs inside each VM: checkout, running steps, masking secrets in output, killing process trees on cancel and timeout | Working |
+| `cmd/devworker` | A worker without VMs for trying Opifica on one machine (no isolation) | Working |
 | `cmd/signer` | Signing service for release artifacts | Not started |
 
 The workers live in their own repositories, so each one contains only its own OS-specific code:
@@ -123,18 +125,25 @@ Database tests need PostgreSQL. Either set `OPIFICA_TEST_DATABASE_URL` to a serv
 on, or install the PostgreSQL server binaries (e.g. `apt install postgresql-17`): the tests then start their own
 throwaway server. Without either, those tests are skipped.
 
-### Trying the controller
+### Running a pipeline on one machine
+
+`devworker` runs jobs without VMs, directly on your machine, with **no isolation**. Use it only with code you trust.
 
 ```sh
 export OPIFICA_DATABASE_URL=postgres://localhost/opifica
-go run ./cmd/controller token create -pool trusted   # prints a join token and the CA fingerprint
-go run ./cmd/controller serve                        # TLS on :8443
-go run ./cmd/controller worker list
+go build -o bin/ ./cmd/...
+
+bin/controller token create -pool trusted        # prints a join token and the CA fingerprint
+bin/controller serve -addr 127.0.0.1:8443 &       # TLS; keep it running
+
+bin/devworker join -controller https://127.0.0.1:8443 -token opj_... -ca-fingerprint sha256:...
+bin/devworker run  -controller https://127.0.0.1:8443 &
 
 # Until Git providers exist, start runs by hand:
-go run ./cmd/controller run create -repo acme/app -pool trusted -sha $(git rev-parse HEAD) -file .opifica/pipeline.yaml
-go run ./cmd/controller run list
-go run ./cmd/controller run show <run-id>
+bin/controller run create -repo acme/app -clone-url "$PWD" -pool trusted \
+    -sha "$(git rev-parse HEAD)" -file .opifica/pipeline.yaml
+bin/controller run show <run-id>
+bin/controller run logs <run-id>
 ```
 
 ## Stack

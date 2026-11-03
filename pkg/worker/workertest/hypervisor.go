@@ -6,11 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/opifica/opifica/internal/agent"
+	"github.com/opifica/opifica/internal/server"
 	"github.com/opifica/opifica/pkg/worker"
 )
 
@@ -21,6 +26,10 @@ type Hypervisor struct {
 	BootDelay time.Duration
 	// FailStart, if set, is called on every Start; a non-nil error fails it.
 	FailStart func(spec worker.VMSpec) error
+	// Agent runs a real agent for every VM, on the host, in a fresh work
+	// directory that is deleted with the VM. Jobs then really run, but with
+	// NO isolation: for tests and development only.
+	Agent bool
 
 	nextID    atomic.Int64
 	mu        sync.Mutex
@@ -82,7 +91,15 @@ type VM struct {
 	mu      sync.Mutex
 	started bool
 	gone    bool
+
+	// With Hypervisor.Agent:
+	root      string
+	agentAddr string
+	stopAgent func()
 }
+
+// Root is the VM's agent work directory (with Hypervisor.Agent).
+func (v *VM) Root() string { return v.root }
 
 var _ worker.VM = (*VM)(nil)
 
@@ -109,7 +126,38 @@ func (v *VM) Start(ctx context.Context) error {
 	if v.gone {
 		return errors.New("vm destroyed")
 	}
+	if v.hv.Agent {
+		if err := v.startAgent(); err != nil {
+			return err
+		}
+	}
 	v.started = true
+	return nil
+}
+
+func (v *VM) startAgent() error {
+	root, err := os.MkdirTemp("", "opifica-vm-")
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		os.RemoveAll(root)
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	done := make(chan struct{})
+	go func() {
+		server.Serve(ctx, ln, agent.Handler(&agent.Server{Root: root, Log: quiet}), quiet)
+		close(done)
+	}()
+	v.root, v.agentAddr = root, ln.Addr().String()
+	v.stopAgent = func() {
+		cancel()
+		<-done
+		os.RemoveAll(root)
+	}
 	return nil
 }
 
@@ -120,8 +168,12 @@ func (v *VM) DialAgent(ctx context.Context) (net.Conn, error) {
 	if !v.started || v.gone {
 		return nil, errors.New("vm not running")
 	}
-	client, server := net.Pipe()
-	server.Close()
+	if v.agentAddr != "" {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", v.agentAddr)
+	}
+	client, srv := net.Pipe()
+	srv.Close()
 	return client, nil
 }
 
@@ -130,9 +182,13 @@ func (v *VM) Destroy(context.Context) error {
 	v.mu.Lock()
 	already := v.gone
 	v.gone = true
+	stop := v.stopAgent
 	v.mu.Unlock()
 	if already {
 		return nil
+	}
+	if stop != nil {
+		stop()
 	}
 	v.hv.mu.Lock()
 	defer v.hv.mu.Unlock()

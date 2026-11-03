@@ -45,6 +45,7 @@ func Parse(data []byte) (*Pipeline, error) {
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		errs := convertYAMLError(err)
 		addFlowHint(errs, data)
+		addColonHint(errs)
 		return nil, errs
 	}
 
@@ -116,6 +117,16 @@ func addFlowHint(errs Errors, data []byte) {
 				e.Msg += ` (hint: ${{ }} can't be used inside inline { } or [ ]; put the value on its own line or quote it, e.g. os: "${{ matrix.os }}")`
 				break
 			}
+		}
+	}
+}
+
+// addColonHint explains "mapping values are not allowed": usually a command
+// or value containing ": ", which YAML reads as a nested key.
+func addColonHint(errs Errors) {
+	for _, e := range errs {
+		if strings.Contains(e.Msg, "mapping values are not allowed") && !strings.Contains(e.Msg, "hint:") {
+			e.Msg += ` (hint: a value containing ": " must be quoted, or written as a block, e.g. run: | on its own line with the command indented below)`
 		}
 	}
 }

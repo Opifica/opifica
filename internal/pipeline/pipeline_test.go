@@ -204,6 +204,8 @@ func TestErrors(t *testing.T) {
 			[]string{"this job has no matrix"}},
 		{"unknown event field", "on: push\njobs:\n  a:\n    runs-on: linux\n    steps:\n      - run: echo ${{ event.author }}\n",
 			[]string{`unknown event field "author"`}},
+		{"colon in a command", "on: push\njobs:\n  a:\n    runs-on: linux\n    steps:\n      - run: git log --format='%h: %s'\n",
+			[]string{`hint: a value containing ": " must be quoted`}},
 		{"expression in flow mapping", "on: push\njobs:\n  a:\n    matrix: { os: [linux] }\n    runs-on: { os: ${{ matrix.os }} }\n    steps: [{run: x}]\n",
 			[]string{"hint: ${{ }} can't be used inside inline"}},
 		{"quoted expression in flow mapping is fine", "on: push\njobs:\n  a:\n    matrix: { os: [linux] }\n    runs-on: { os: \"${{ matrix.os }}\", arch: sparc }\n    steps: [{run: x}]\n",

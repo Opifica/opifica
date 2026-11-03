@@ -36,7 +36,7 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 - [x] **Scheduler:** match planned jobs to workers by OS, architecture, image, labels and pool; respect `needs`;
   safe with several controllers (`FOR UPDATE SKIP LOCKED`)
 - [x] **Runs:** create a run from a pipeline file and an event; track job and run state; cancel
-- [ ] **Logs:** receive log chunks, drop duplicates after reconnects, store them on disk
+- [x] **Logs:** receive log chunks, drop duplicates after reconnects, store them on disk (`controller run logs`)
 - [ ] **Secrets:** encrypted store; requests checked against the job token and policy
 - [ ] **Admin config:** static file for pools, routing (event → pool) and secret policy
 - [x] **TLS** on the worker API, with worker client certificates accepted
@@ -48,16 +48,18 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
 ### Worker kit and agent
 
 - [x] Controller client: join (saving the identity to disk), connect, reconnect with backoff, heartbeats
-- [ ] Heartbeats filled from the warm pool and job runner
-- [ ] Job runner: lease a VM → checkout → run steps through the agent → stream masked logs → collect reports
-  and artifacts → destroy the VM
-- [ ] Local Git mirror per repository
-- [ ] Agent: `Ready`, `Checkout`, `Exec`, `Collect`
+- [x] Heartbeats filled from the warm pool and job runner
+- [x] Job runner: lease a VM → checkout → run steps through the agent → stream masked logs → destroy the VM;
+  updates survive reconnects through an outbox
+- [ ] Collect and store test reports and artifacts (steps are skipped with a note for now)
+- [x] Local Git mirror per repository
+- [x] Agent: `Ready`, `Checkout`, `Exec`, `Collect`; secrets masked in output; process trees killed on cancel and timeout
+- [x] `devworker`: try everything on one machine without VMs (no isolation)
 
 ### Testing
 
-- [ ] Integration test: controller + PostgreSQL + worker (fake hypervisor) + real agent, in CI
-- [ ] Failure tests: worker killed mid-job, lease expiry, reconnect, denied secret
+- [x] Integration test: controller + PostgreSQL + worker (fake hypervisor) + real agent, in CI
+- [x] Failure tests: worker killed mid-job, lease expiry, reconnect, denied secret
 
 ## M2 · Triggered by Git
 
