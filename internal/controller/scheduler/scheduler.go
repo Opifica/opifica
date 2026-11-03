@@ -51,6 +51,13 @@ type Config struct {
 	Interval time.Duration
 	// Logs stores job output. Nil drops it.
 	Logs *logs.Store
+	// Secrets answers secret requests from jobs. Nil denies them all.
+	Secrets SecretBroker
+}
+
+// SecretBroker decides secret requests; see secrets.Manager.
+type SecretBroker interface {
+	Request(ctx context.Context, worker uuid.UUID, req *opificav1.SecretRequest) (value []byte, deniedReason string, err error)
 }
 
 // Scheduler implements workers.MessageHandler.
@@ -482,17 +489,38 @@ func (s *Scheduler) HandleWorkerMessage(ctx context.Context, worker uuid.UUID, m
 	case *opificav1.ConnectRequest_JobUpdate:
 		s.jobUpdate(ctx, worker, m.JobUpdate)
 	case *opificav1.ConnectRequest_SecretRequest:
-		// Until the secrets broker exists, answer so the job doesn't hang.
 		return s.sessions.Send(ctx, worker, &opificav1.ConnectResponse{Message: &opificav1.ConnectResponse_SecretResponse{
-			SecretResponse: &opificav1.SecretResponse{
-				RequestId: m.SecretRequest.GetRequestId(),
-				Result:    &opificav1.SecretResponse_DeniedReason{DeniedReason: "secrets are not implemented yet"},
-			},
+			SecretResponse: s.secret(ctx, worker, m.SecretRequest),
 		}})
 	case *opificav1.ConnectRequest_LogChunk:
 		s.logChunk(ctx, worker, m.LogChunk)
 	}
 	return nil
+}
+
+// secret answers a secret request. The job always gets an answer, so it
+// never hangs waiting.
+func (s *Scheduler) secret(ctx context.Context, worker uuid.UUID, req *opificav1.SecretRequest) *opificav1.SecretResponse {
+	resp := &opificav1.SecretResponse{RequestId: req.GetRequestId()}
+	deny := func(reason string) *opificav1.SecretResponse {
+		resp.Result = &opificav1.SecretResponse_DeniedReason{DeniedReason: reason}
+		return resp
+	}
+	if s.cfg.Secrets == nil {
+		return deny("secrets are not configured on this controller")
+	}
+	value, reason, err := s.cfg.Secrets.Request(ctx, worker, req)
+	switch {
+	case err != nil:
+		s.log.Error("checking secret request", "secret", req.GetName(), "job", req.GetJobId(), "err", err)
+		return deny("the controller could not check this request; see its log")
+	case reason != "":
+		s.log.Warn("secret denied", "secret", req.GetName(), "job", req.GetJobId(), "worker", worker, "reason", reason)
+		return deny(reason)
+	}
+	s.log.Info("secret granted", "secret", req.GetName(), "job", req.GetJobId(), "worker", worker)
+	resp.Result = &opificav1.SecretResponse_Value{Value: value}
+	return resp
 }
 
 func (s *Scheduler) logChunk(ctx context.Context, worker uuid.UUID, c *opificav1.LogChunk) {

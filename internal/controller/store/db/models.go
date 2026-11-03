@@ -67,6 +67,31 @@ type Run struct {
 	FinishedAt        *time.Time
 }
 
+type Secret struct {
+	Name              string
+	Ciphertext        []byte
+	Nonce             []byte
+	KeyID             string
+	Repos             []string
+	Pools             []string
+	Refs              []string
+	AllowPullRequests bool
+	Description       string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type SecretAccess struct {
+	ID         int64
+	SecretName string
+	JobID      *uuid.UUID
+	RunID      *uuid.UUID
+	WorkerID   *uuid.UUID
+	Granted    bool
+	Reason     string
+	At         time.Time
+}
+
 type Worker struct {
 	ID                uuid.UUID
 	Hostname          string

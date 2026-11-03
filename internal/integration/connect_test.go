@@ -23,6 +23,7 @@ import (
 	"github.com/opifica/opifica/internal/controller/ca"
 	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/scheduler"
+	"github.com/opifica/opifica/internal/controller/secrets"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
 	"github.com/opifica/opifica/internal/server"
@@ -40,11 +41,12 @@ func quiet() *slog.Logger {
 }
 
 type env struct {
-	t     *testing.T
-	svc   *workers.Service
-	sched *scheduler.Scheduler
-	logs  *logs.Store
-	url   string
+	t       *testing.T
+	svc     *workers.Service
+	sched   *scheduler.Scheduler
+	logs    *logs.Store
+	secrets *secrets.Manager
+	url     string
 }
 
 // newEnv starts a controller with short timeouts on a random port.
@@ -68,8 +70,13 @@ func newEnv(t *testing.T) *env {
 		},
 	}
 	logStore := &logs.Store{Dir: t.TempDir()}
+	key, err := secrets.LoadOrCreateKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretMgr := &secrets.Manager{Store: st, Key: key}
 	sched := scheduler.New(st, svc.Sessions(), quiet(), scheduler.Config{
-		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond, Logs: logStore,
+		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond, Logs: logStore, Secrets: secretMgr,
 	})
 	svc.Messages = sched
 	go sched.Run(ctx)
@@ -91,7 +98,7 @@ func newEnv(t *testing.T) *env {
 		<-done
 		st.Close()
 	})
-	return &env{t: t, svc: svc, sched: sched, logs: logStore, url: "https://" + ln.Addr().String()}
+	return &env{t: t, svc: svc, sched: sched, logs: logStore, secrets: secretMgr, url: "https://" + ln.Addr().String()}
 }
 
 func info() *opificav1.WorkerInfo {
