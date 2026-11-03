@@ -46,6 +46,7 @@ type fakeWorker struct {
 	received   []*opificav1.Job
 	maxRunning int
 	behave     func(*opificav1.Job) outcome
+	secretResp chan *opificav1.SecretResponse
 }
 
 type workerOpts struct {
@@ -81,7 +82,8 @@ func (e *env) fakeWorker(name string, o workerOpts) *fakeWorker {
 	}
 
 	id := e.joinWith(o.pool, wi)
-	fw := &fakeWorker{name: name, id: id, running: map[string]chan struct{}{}, behave: o.behave}
+	fw := &fakeWorker{name: name, id: id, running: map[string]chan struct{}{}, behave: o.behave,
+		secretResp: make(chan *opificav1.SecretResponse, 8)}
 	fw.runningClient = e.start(id, func(c *worker.ClientConfig) {
 		c.Info = wi
 		c.Status = fw.status
@@ -122,6 +124,8 @@ func (fw *fakeWorker) onMessage(_ context.Context, m *opificav1.ConnectResponse)
 			close(c)
 		}
 		fw.mu.Unlock()
+	case *opificav1.ConnectResponse_SecretResponse:
+		fw.secretResp <- msg.SecretResponse
 	}
 }
 

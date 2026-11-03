@@ -3,7 +3,7 @@
 //
 // Implemented so far: the database, the built-in certificate authority, join
 // tokens, Join, the Connect stream, the scheduler (runs, jobs, leases,
-// retries, cancellation) and job logs. Secrets and Git providers come next.
+// retries, cancellation), job logs and secrets. Git providers come next.
 package main
 
 import (
@@ -27,6 +27,7 @@ import (
 	"github.com/opifica/opifica/internal/controller/ca"
 	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/scheduler"
+	"github.com/opifica/opifica/internal/controller/secrets"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
 	"github.com/opifica/opifica/internal/server"
@@ -45,18 +46,26 @@ Commands:
   run show       Show a run and its jobs
   run cancel     Cancel a run
   run logs       Print the output of a run's jobs
+  secret set     Store a secret and who may use it (value from stdin)
+  secret list    List secrets and their policies (never values)
+  secret delete  Delete a secret
+  secret access  Show who asked for a secret, and whether they got it
   version        Print the version
 
 Common options (or environment variables):
   -database-url  PostgreSQL URL (OPIFICA_DATABASE_URL)
-  -data-dir      Directory for the CA key and certificate (OPIFICA_DATA_DIR, default ./data)
+  -data-dir      Directory for the CA, the secrets key and job logs (OPIFICA_DATA_DIR, default ./data)
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(runWithInput(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithInput(args, strings.NewReader(""), stdout, stderr)
+}
+
+func runWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -72,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return workerRevoke(args[2:], stdout, stderr)
 	case args[0] == "run" && len(args) > 1:
 		return runCommand(args[1], args[2:], stdout, stderr)
+	case args[0] == "secret" && len(args) > 1:
+		return secretCommand(args[1], args[2:], stdin, stdout, stderr)
 	case args[0] == "version":
 		fmt.Fprintln(stdout, version.Version)
 		return 0
@@ -142,8 +153,14 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	log.Info("certificate authority ready", "fingerprint", svc.CA.Fingerprint())
+	key, err := secrets.LoadOrCreateKey(c.dataDir)
+	if err != nil {
+		log.Error("loading secrets key", "err", err)
+		return 1
+	}
 	sched := scheduler.New(svc.Store, svc.Sessions(), log.With("component", "scheduler"), scheduler.Config{
-		Logs: &logs.Store{Dir: filepath.Join(c.dataDir, "logs")},
+		Logs:    &logs.Store{Dir: filepath.Join(c.dataDir, "logs")},
+		Secrets: &secrets.Manager{Store: svc.Store, Key: key},
 	})
 	svc.Messages = sched
 	go sched.Run(ctx)

@@ -37,7 +37,9 @@ result are stored. Tested in ordinary CI, using the fake hypervisor with a real 
   safe with several controllers (`FOR UPDATE SKIP LOCKED`)
 - [x] **Runs:** create a run from a pipeline file and an event; track job and run state; cancel
 - [x] **Logs:** receive log chunks, drop duplicates after reconnects, store them on disk (`controller run logs`)
-- [ ] **Secrets:** encrypted store; requests checked against the job token and policy
+- [x] **Secrets:** encrypted store (AES-256-GCM); requests checked against the worker holding the job, the job
+  token, the job's `secrets:` list and the admin's policy (repositories, pools, refs, pull requests); every
+  request audited (`controller secret set|list|delete|access`)
 - [ ] **Admin config:** static file for pools, routing (event → pool) and secret policy
 - [x] **TLS** on the worker API, with worker client certificates accepted
 - [x] **mTLS required** for `Connect`; the certificate must be the worker's current one
@@ -94,6 +96,7 @@ Can run alongside M2 and M3.
 ## M5 · Supply-chain security
 
 - [ ] Signing service: release artifacts signed with keys in an HSM or KMS; keys never reach a VM
+- [ ] Secrets key in a KMS or HSM instead of a file; key rotation
 - [ ] Signed provenance for every job (SLSA)
 - [ ] Optional rebuild-and-compare for releases on two different workers
 - [ ] Cache rules: untrusted jobs can never write caches that trusted or release jobs read

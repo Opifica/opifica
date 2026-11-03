@@ -4,8 +4,8 @@ Core of [Opifica](https://github.com/opifica), an open-source CI/CD system built
 where every job runs in a fresh virtual machine.
 
 > **Status:** early development. A pipeline runs end to end: the controller schedules its jobs, a worker checks
-> out the exact commit and runs each job's commands through the agent, and the output is stored. Real VMs,
-> secrets and Git providers come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> out the exact commit and runs each job's commands through the agent with the secrets the admin allows, and
+> the output is stored. Real VMs and Git providers come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 > See the [organisation page](https://github.com/opifica) for the architecture.
 
 ## What lives here
@@ -21,7 +21,8 @@ where every job runs in a fresh virtual machine.
 | `cmd/controller` | Join tokens, worker joining over TLS, the Connect stream, worker revocation | Working |
 | `internal/controller/scheduler` | Runs and jobs, matching jobs to workers, leases, retries, cancellation | Working |
 | `internal/controller/logs` | Job output on the controller's disk | Working |
-| | Secrets, Git providers, admin API | Not started |
+| `internal/controller/secrets` | Encrypted secrets, handed only to jobs the admin's policy allows; every request audited | Working |
+| | Git providers, admin API | Not started |
 | `cmd/agent`, `internal/agent` | Runs inside each VM: checkout, running steps, masking secrets in output, killing process trees on cancel and timeout | Working |
 | `cmd/devworker` | A worker without VMs for trying Opifica on one machine (no isolation) | Working |
 | `cmd/signer` | Signing service for release artifacts | Not started |
@@ -145,6 +146,20 @@ bin/controller run create -repo acme/app -clone-url "$PWD" -pool trusted \
 bin/controller run show <run-id>
 bin/controller run logs <run-id>
 ```
+
+### Secrets
+
+The admin decides who gets a secret; a pipeline can only ask for it. The value is read from standard input:
+
+```sh
+printf %s "$TOKEN" | bin/controller secret set DEPLOY_TOKEN -repo 'acme/*' -pool trusted -ref refs/heads/main
+bin/controller secret list                  # policies, never values
+bin/controller secret access DEPLOY_TOKEN   # who asked, and whether they got it
+```
+
+A job gets `DEPLOY_TOKEN` only if it lists it under `secrets:`, the step that needs it names it too, and the run
+matches the policy: repository, pool and ref. Pull requests get no secrets unless the secret is set with
+`-allow-pull-requests`. Values are masked as `***` in job output.
 
 ## Stack
 

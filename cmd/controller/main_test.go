@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +175,43 @@ func TestRunCommands(t *testing.T) {
 	run(append([]string{"run", "show", id[1]}, common...), &out, &errOut)
 	if !regexp.MustCompile(`: cancelled`).MatchString(out.String()) {
 		t.Errorf("after cancel:\n%s", out.String())
+	}
+}
+
+func TestSecretCommands(t *testing.T) {
+	common := []string{"-database-url", pgtest.New(t), "-data-dir", t.TempDir()}
+	var out, errOut bytes.Buffer
+	cmd := func(stdin string, args ...string) int {
+		out.Reset()
+		errOut.Reset()
+		return runWithInput(append(args, common...), strings.NewReader(stdin), &out, &errOut)
+	}
+
+	if code := cmd("very-secret-value\n", "secret", "set", "DEPLOY_TOKEN", "-repo", "acme/*", "-pool", "release", "-ref", "refs/tags/v*"); code != 0 {
+		t.Fatalf("secret set: exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "(17 bytes)") {
+		t.Errorf("the trailing newline should not be stored: %s", out.String())
+	}
+	if code := cmd("", "secret", "list"); code != 0 || !regexp.MustCompile(`DEPLOY_TOKEN\s+acme/\*\s+release\s+refs/tags/v\*\s+no`).MatchString(out.String()) {
+		t.Errorf("secret list (exit %d):\n%s", code, out.String())
+	}
+	if strings.Contains(out.String(), "very-secret") {
+		t.Error("secret list shows the value")
+	}
+	if code := cmd("x", "secret", "set", "lowercase", "-repo", "*", "-pool", "trusted"); code == 0 {
+		t.Error("accepted an invalid name")
+	}
+	if code := cmd("x", "secret", "set", "NO_POOL", "-repo", "*"); code == 0 {
+		t.Error("accepted a secret without a pool")
+	}
+	if code := cmd("", "secret", "access", "DEPLOY_TOKEN"); code != 0 || !strings.Contains(out.String(), "RESULT") {
+		t.Errorf("secret access (exit %d): %s", code, errOut.String())
+	}
+	if code := cmd("", "secret", "delete", "DEPLOY_TOKEN"); code != 0 {
+		t.Errorf("secret delete: exit %d: %s", code, errOut.String())
+	}
+	if code := cmd("", "secret", "delete", "DEPLOY_TOKEN"); code == 0 {
+		t.Error("deleting a missing secret succeeded")
 	}
 }
