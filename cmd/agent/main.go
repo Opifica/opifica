@@ -2,41 +2,59 @@
 // worker on the host: checkout, running steps, streaming output and
 // collecting files. It never talks to the controller.
 //
-// This is a skeleton: every method returns "unimplemented". In production the
-// agent listens on vsock or virtio-serial; -listen is for development.
+// In a VM the agent listens on vsock (not implemented yet; see the worker
+// repositories). -listen with a TCP address or unix:/path is for development.
 package main
 
 import (
 	"context"
 	"flag"
 	"log/slog"
-	"net/http"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
-	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
+	"github.com/opifica/opifica/internal/agent"
 	"github.com/opifica/opifica/internal/server"
 	"github.com/opifica/opifica/internal/version"
 )
 
 func main() {
-	listen := flag.String("listen", "127.0.0.1:7070", "address to listen on (development only)")
+	listen := flag.String("listen", "127.0.0.1:7070", "TCP address or unix:/path/to/socket (development)")
+	root := flag.String("root", defaultRoot(), "work directory; every request path stays inside it")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil)).With("service", "agent")
-	log.Info("starting", "version", version.Version)
+	log.Info("starting", "version", version.Version, "root", *root)
+
+	if err := os.MkdirAll(*root, 0o755); err != nil {
+		log.Error("creating work directory", "err", err)
+		os.Exit(1)
+	}
+	network, addr := "tcp", *listen
+	if p, ok := strings.CutPrefix(*listen, "unix:"); ok {
+		network, addr = "unix", p
+		os.Remove(p)
+	}
+	ln, err := net.Listen(network, addr)
+	if err != nil {
+		log.Error("listening", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", server.Health)
-	mux.Handle(opificav1connect.NewAgentServiceHandler(&agentService{}))
-	if err := server.Run(ctx, *listen, mux, log); err != nil {
+	if err := server.Serve(ctx, ln, agent.Handler(&agent.Server{Root: *root, Log: log}), log); err != nil {
 		log.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-type agentService struct {
-	opificav1connect.UnimplementedAgentServiceHandler
+func defaultRoot() string {
+	if d, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(d, "opifica-work")
+	}
+	return "opifica-work"
 }

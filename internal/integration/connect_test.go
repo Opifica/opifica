@@ -21,6 +21,7 @@ import (
 	"github.com/opifica/opifica/gen/opifica/v1/opificav1connect"
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
+	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
@@ -42,6 +43,7 @@ type env struct {
 	t     *testing.T
 	svc   *workers.Service
 	sched *scheduler.Scheduler
+	logs  *logs.Store
 	url   string
 }
 
@@ -65,8 +67,9 @@ func newEnv(t *testing.T) *env {
 			TouchInterval:    50 * time.Millisecond,
 		},
 	}
+	logStore := &logs.Store{Dir: t.TempDir()}
 	sched := scheduler.New(st, svc.Sessions(), quiet(), scheduler.Config{
-		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond,
+		Lease: 400 * time.Millisecond, Interval: 20 * time.Millisecond, Logs: logStore,
 	})
 	svc.Messages = sched
 	go sched.Run(ctx)
@@ -88,7 +91,7 @@ func newEnv(t *testing.T) *env {
 		<-done
 		st.Close()
 	})
-	return &env{t: t, svc: svc, sched: sched, url: "https://" + ln.Addr().String()}
+	return &env{t: t, svc: svc, sched: sched, logs: logStore, url: "https://" + ln.Addr().String()}
 }
 
 func info() *opificav1.WorkerInfo {
@@ -108,13 +111,18 @@ func (e *env) join(pool string) *worker.Identity {
 
 func (e *env) joinWith(pool string, wi *opificav1.WorkerInfo) *worker.Identity {
 	e.t.Helper()
+	return e.joinInto(pool, wi, e.t.TempDir())
+}
+
+func (e *env) joinInto(pool string, wi *opificav1.WorkerInfo, stateDir string) *worker.Identity {
+	e.t.Helper()
 	tok, err := e.svc.CreateToken(context.Background(), workers.TokenRequest{Pool: pool})
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	id, err := worker.Join(context.Background(), worker.JoinConfig{
 		ControllerURL: e.url, Token: tok.Secret, CAFingerprint: tok.CAFingerprint,
-		StateDir: e.t.TempDir(), Info: wi,
+		StateDir: stateDir, Info: wi,
 	})
 	if err != nil {
 		e.t.Fatalf("Join: %v", err)

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	mrand "math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	opificav1 "github.com/opifica/opifica/gen/opifica/v1"
+	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/store/db"
 	"github.com/opifica/opifica/internal/controller/workers"
@@ -47,6 +49,8 @@ type Config struct {
 	// Interval is how often the scheduler looks for work and expired leases
 	// even when nothing woke it.
 	Interval time.Duration
+	// Logs stores job output. Nil drops it.
+	Logs *logs.Store
 }
 
 // Scheduler implements workers.MessageHandler.
@@ -56,6 +60,11 @@ type Scheduler struct {
 	log      *slog.Logger
 	cfg      Config
 	kick     chan struct{}
+
+	// owners caches which worker holds a job, so log chunks don't each
+	// need a database query to check they come from the right worker.
+	ownersMu sync.Mutex
+	owners   map[uuid.UUID]uuid.UUID
 }
 
 var _ workers.MessageHandler = (*Scheduler)(nil)
@@ -71,7 +80,7 @@ func New(st *store.Store, sessions *workers.Registry, log *slog.Logger, cfg Conf
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Scheduler{store: st, sessions: sessions, log: log, cfg: cfg, kick: make(chan struct{}, 1)}
+	return &Scheduler{store: st, sessions: sessions, log: log, cfg: cfg, kick: make(chan struct{}, 1), owners: map[uuid.UUID]uuid.UUID{}}
 }
 
 // Kick makes the scheduler look for work now.
@@ -397,6 +406,7 @@ func (s *Scheduler) reapLeases(ctx context.Context) {
 			continue
 		}
 		s.log.Warn("lease expired", "job", job.ID, "worker", e.WorkerID, "attempt", job.Attempt, "now", job.State)
+		s.released(job.ID)
 		if e.WorkerID != nil {
 			// In case the worker is alive but lost track of the job.
 			s.cancelOnWorker(ctx, *e.WorkerID, job.ID, "lease expired")
@@ -454,6 +464,9 @@ func (s *Scheduler) WorkerDisconnected(worker uuid.UUID) {
 		s.log.Error("releasing unstarted jobs", "worker", worker, "err", err)
 		return
 	}
+	for _, id := range ids {
+		s.released(id)
+	}
 	if len(ids) > 0 {
 		s.log.Info("worker disconnected before starting jobs; queued them again", "worker", worker, "jobs", len(ids))
 		s.Kick()
@@ -477,9 +490,51 @@ func (s *Scheduler) HandleWorkerMessage(ctx context.Context, worker uuid.UUID, m
 			},
 		}})
 	case *opificav1.ConnectRequest_LogChunk:
-		// Log storage comes next; drop for now.
+		s.logChunk(ctx, worker, m.LogChunk)
 	}
 	return nil
+}
+
+func (s *Scheduler) logChunk(ctx context.Context, worker uuid.UUID, c *opificav1.LogChunk) {
+	if s.cfg.Logs == nil {
+		return
+	}
+	jobID, err := uuid.Parse(c.GetJobId())
+	if err != nil || !s.holds(ctx, worker, jobID) {
+		return
+	}
+	if _, err := s.cfg.Logs.Append(jobID, c.GetSequence(), c.GetData()); err != nil {
+		s.log.Error("storing log", "job", jobID, "err", err)
+	}
+}
+
+// holds reports whether worker currently holds the job.
+func (s *Scheduler) holds(ctx context.Context, worker, job uuid.UUID) bool {
+	s.ownersMu.Lock()
+	owner, ok := s.owners[job]
+	s.ownersMu.Unlock()
+	if ok {
+		return owner == worker
+	}
+	j, err := s.store.GetJob(ctx, job)
+	if err != nil || j.WorkerID == nil || *j.WorkerID != worker || (j.State != "assigned" && j.State != "running") {
+		return false
+	}
+	s.ownersMu.Lock()
+	s.owners[job] = worker
+	s.ownersMu.Unlock()
+	return true
+}
+
+// released forgets a job's owner and closes its log once the worker no
+// longer holds it.
+func (s *Scheduler) released(job uuid.UUID) {
+	s.ownersMu.Lock()
+	delete(s.owners, job)
+	s.ownersMu.Unlock()
+	if s.cfg.Logs != nil {
+		s.cfg.Logs.Finish(job)
+	}
 }
 
 func (s *Scheduler) renew(ctx context.Context, worker uuid.UUID, ids []string) {
@@ -526,6 +581,7 @@ func (s *Scheduler) jobUpdate(ctx context.Context, worker uuid.UUID, u *opificav
 			return
 		}
 		log.Info("job finished", "key", job.Key, "state", state)
+		s.released(jobID)
 		s.advance(ctx, job.RunID)
 
 	case opificav1.JobState_JOB_STATE_ERRORED:
@@ -535,6 +591,7 @@ func (s *Scheduler) jobUpdate(ctx context.Context, worker uuid.UUID, u *opificav
 			return
 		}
 		log.Warn("job errored on the worker", "err", u.GetError(), "attempt", job.Attempt, "now", job.State)
+		s.released(jobID)
 		s.settled(ctx, job)
 
 	default:

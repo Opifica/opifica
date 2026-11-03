@@ -2,8 +2,8 @@
 // integration, pipeline engine, scheduler and secrets broker.
 //
 // Implemented so far: the database, the built-in certificate authority, join
-// tokens, Join, the Connect stream, and the scheduler (runs, jobs, leases,
-// retries, cancellation). Logs, secrets and Git providers come next.
+// tokens, Join, the Connect stream, the scheduler (runs, jobs, leases,
+// retries, cancellation) and job logs. Secrets and Git providers come next.
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/opifica/opifica/internal/controller/api"
 	"github.com/opifica/opifica/internal/controller/ca"
+	"github.com/opifica/opifica/internal/controller/logs"
 	"github.com/opifica/opifica/internal/controller/scheduler"
 	"github.com/opifica/opifica/internal/controller/store"
 	"github.com/opifica/opifica/internal/controller/workers"
@@ -42,6 +44,7 @@ Commands:
   run list       List recent runs
   run show       Show a run and its jobs
   run cancel     Cancel a run
+  run logs       Print the output of a run's jobs
   version        Print the version
 
 Common options (or environment variables):
@@ -139,7 +142,9 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	log.Info("certificate authority ready", "fingerprint", svc.CA.Fingerprint())
-	sched := scheduler.New(svc.Store, svc.Sessions(), log.With("component", "scheduler"), scheduler.Config{})
+	sched := scheduler.New(svc.Store, svc.Sessions(), log.With("component", "scheduler"), scheduler.Config{
+		Logs: &logs.Store{Dir: filepath.Join(c.dataDir, "logs")},
+	})
 	svc.Messages = sched
 	go sched.Run(ctx)
 	if err := server.RunTLS(ctx, *addr, api.NewHandler(svc), tlsCfg, log); err != nil {

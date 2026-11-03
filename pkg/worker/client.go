@@ -273,9 +273,11 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 }
 
-// backoff is exponential from 500ms with ±25% jitter, capped at max.
+// backoff is exponential from 100ms with ±25% jitter, capped at max. The
+// first retry is quick because most drops are momentary, and a worker that
+// is back within its lease keeps its running jobs.
 func backoff(attempt int, max time.Duration) time.Duration {
-	d := time.Duration(float64(500*time.Millisecond) * math.Pow(2, float64(min(attempt, 20))))
+	d := time.Duration(float64(100*time.Millisecond) * math.Pow(2, float64(min(attempt, 20))))
 	d = min(d, max)
 	return time.Duration(float64(d) * (0.75 + 0.5*mrand.Float64()))
 }
